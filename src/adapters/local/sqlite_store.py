@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS processed_threads (
     classification TEXT,
     classified_by TEXT,
     confidence REAL,
+    applied_labels TEXT,
     last_action TEXT,
     updated_at TEXT,
     PRIMARY KEY (tenant_id, thread_id)
@@ -33,6 +34,8 @@ CREATE TABLE IF NOT EXISTS action_log (
     classified_by TEXT,
     label_name TEXT,
     reversal_data TEXT,
+    sender TEXT,
+    sender_domain TEXT,
     run_id TEXT,
     created_at TEXT NOT NULL
 );
@@ -44,8 +47,13 @@ CREATE TABLE IF NOT EXISTS sender_stats (
     total_received INTEGER DEFAULT 0,
     opened INTEGER DEFAULT 0,
     replied INTEGER DEFAULT 0,
+    starred INTEGER DEFAULT 0,
+    manually_archived INTEGER DEFAULT 0,
+    trashed INTEGER DEFAULT 0,
+    spam_marked INTEGER DEFAULT 0,
     engagement_score REAL DEFAULT 0.0,
     blocklisted INTEGER DEFAULT 0,
+    first_seen_at TEXT,
     last_updated TEXT,
     PRIMARY KEY (tenant_id, sender)
 );
@@ -162,17 +170,22 @@ class SQLiteStateStore(StateStorePort):
     async def mark_thread_processed(
         self, tenant_id: str, thread_id: str, classification: str,
         classified_by: str, confidence: float,
+        applied_labels: list[str] | None = None,
     ) -> None:
+        labels_json = json.dumps(applied_labels) if applied_labels else "[]"
         await self.db.execute(
             """INSERT INTO processed_threads
-               (tenant_id, thread_id, classification, classified_by, confidence, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?)
+               (tenant_id, thread_id, classification, classified_by, confidence,
+                applied_labels, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(tenant_id, thread_id) DO UPDATE SET
                  classification=excluded.classification,
                  classified_by=excluded.classified_by,
                  confidence=excluded.confidence,
+                 applied_labels=excluded.applied_labels,
                  updated_at=excluded.updated_at""",
-            (tenant_id, thread_id, classification, classified_by, confidence, _now()),
+            (tenant_id, thread_id, classification, classified_by, confidence,
+             labels_json, _now()),
         )
         await self.db.commit()
 
@@ -199,12 +212,14 @@ class SQLiteStateStore(StateStorePort):
         cur = await self.db.execute(
             """INSERT INTO action_log
                (tenant_id, thread_id, action_type, risk_level, status, reason,
-                classified_by, label_name, reversal_data, run_id, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                classified_by, label_name, reversal_data, sender, sender_domain,
+                run_id, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 record.tenant_id, record.thread_id, record.action_type,
                 record.risk_level, record.status, record.reason,
                 record.classified_by, record.label_name, record.reversal_data,
+                record.sender, record.sender_domain,
                 None, record.created_at or _now(),
             ),
         )
@@ -258,25 +273,56 @@ class SQLiteStateStore(StateStorePort):
         row = await cur.fetchone()
         return row[0] if row else 0
 
+    async def get_quarantined_expired(
+        self, tenant_id: str, max_age_days: int
+    ) -> list[ActionRecord]:
+        from datetime import timedelta
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=max_age_days)).isoformat()
+        cur = await self.db.execute(
+            """SELECT * FROM action_log
+               WHERE tenant_id=? AND status='quarantine' AND created_at <= ?
+               ORDER BY created_at ASC""",
+            (tenant_id, cutoff),
+        )
+        return [self._row_to_action(r) for r in await cur.fetchall()]
+
+    async def get_actions_for_thread(
+        self, tenant_id: str, thread_id: str
+    ) -> list[ActionRecord]:
+        cur = await self.db.execute(
+            """SELECT * FROM action_log
+               WHERE tenant_id=? AND thread_id=? AND status='executed'
+               ORDER BY created_at DESC""",
+            (tenant_id, thread_id),
+        )
+        return [self._row_to_action(r) for r in await cur.fetchall()]
+
     # -- Sender stats --
 
     async def upsert_sender_stats(self, stats: SenderStats) -> None:
         await self.db.execute(
             """INSERT INTO sender_stats
                (tenant_id, sender, sender_domain, total_received, opened, replied,
-                engagement_score, blocklisted, last_updated)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                starred, manually_archived, trashed, spam_marked,
+                engagement_score, blocklisted, first_seen_at, last_updated)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(tenant_id, sender) DO UPDATE SET
                  total_received=excluded.total_received,
                  opened=excluded.opened,
                  replied=excluded.replied,
+                 starred=excluded.starred,
+                 manually_archived=excluded.manually_archived,
+                 trashed=excluded.trashed,
+                 spam_marked=excluded.spam_marked,
                  engagement_score=excluded.engagement_score,
                  blocklisted=excluded.blocklisted,
                  last_updated=excluded.last_updated""",
             (
                 stats.tenant_id, stats.sender, stats.sender_domain,
                 stats.total_received, stats.opened, stats.replied,
-                stats.engagement_score, int(stats.blocklisted), stats.last_updated or _now(),
+                stats.starred, stats.manually_archived, stats.trashed, stats.spam_marked,
+                stats.engagement_score, int(stats.blocklisted),
+                stats.first_seen_at or _now(), stats.last_updated or _now(),
             ),
         )
         await self.db.commit()
@@ -543,6 +589,8 @@ class SQLiteStateStore(StateStorePort):
             classified_by=row["classified_by"] or "",
             label_name=row["label_name"],
             reversal_data=row["reversal_data"],
+            sender=row["sender"] or "",
+            sender_domain=row["sender_domain"] or "",
             created_at=row["created_at"],
         )
 
@@ -555,8 +603,13 @@ class SQLiteStateStore(StateStorePort):
             total_received=row["total_received"],
             opened=row["opened"],
             replied=row["replied"],
+            starred=row["starred"],
+            manually_archived=row["manually_archived"],
+            trashed=row["trashed"],
+            spam_marked=row["spam_marked"],
             engagement_score=row["engagement_score"],
             blocklisted=bool(row["blocklisted"]),
+            first_seen_at=row["first_seen_at"] or "",
             last_updated=row["last_updated"] or "",
         )
 

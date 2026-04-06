@@ -47,12 +47,18 @@ class BatchExecutor:
             reason=action.reason,
             classified_by=action.classified_by.value,
             label_name=action.label_name,
+            sender=meta.sender,
+            sender_domain=meta.sender_domain,
             created_at=datetime.now(timezone.utc).isoformat(),
         )
 
         if status == ActionStatus.EXECUTED:
-            reversal = self._perform_action(action, meta)
-            record.reversal_data = json.dumps(reversal) if reversal else None
+            try:
+                reversal = self._perform_action(action, meta)
+                record.reversal_data = json.dumps(reversal) if reversal else None
+            except Exception as exc:
+                logger.error("Action execution failed for %s: %s", action.thread_id, exc)
+                record.status = "failed"
         elif status == ActionStatus.DRY_RUN:
             self._apply_dry_run_label(action)
         elif status == ActionStatus.QUARANTINE:
@@ -78,6 +84,8 @@ class BatchExecutor:
                 reason=action.reason,
                 classified_by=action.classified_by.value,
                 label_name=action.label_name,
+                sender=meta.sender,
+                sender_domain=meta.sender_domain,
                 created_at=datetime.now(timezone.utc).isoformat(),
             )
 

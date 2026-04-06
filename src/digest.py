@@ -43,12 +43,15 @@ class DigestBuilder:
         llm_usage = await self._store.get_llm_usage_today(self._tenant)
         class_counts = await self._store.count_classifications_by_source(self._tenant, since=since)
         dependency_trend = await self._store.get_llm_dependency_trend(self._tenant, days=7)
+        overrides = await self._store.get_overrides(self._tenant, limit=100)
+        recent_overrides = [o for o in overrides if o.get("created_at", "") >= since]
 
         total = sum(class_counts.values()) or 1
         llm_count = class_counts.get("llm", 0)
         llm_pct = (llm_count / total) * 100
 
-        html = self._render_html(actions, llm_usage, class_counts, llm_pct, dependency_trend, crawl_state)
+        html = self._render_html(actions, llm_usage, class_counts, llm_pct,
+                                 dependency_trend, crawl_state, recent_overrides)
 
         digest_prompt = ""
         try:
@@ -86,6 +89,7 @@ class DigestBuilder:
         llm_pct: float,
         dependency_trend: list[dict[str, Any]],
         crawl_state: CrawlState | None,
+        overrides: list[dict[str, Any]] | None = None,
     ) -> str:
         executed = [a for a in actions if a.status == "executed"]
         dry_run = [a for a in actions if a.status == "dry_run"]
@@ -133,6 +137,27 @@ class DigestBuilder:
             for d in reversed(dependency_trend):
                 sections.append(f"<li>{d['date']}: {d['ratio']:.1f}%</li>")
             sections.append("</ul>")
+
+        # Agent performance section
+        override_count = len(overrides) if overrides else 0
+        total_executed = len(executed)
+        accuracy = ((total_executed - override_count) / total_executed * 100) if total_executed > 0 else 100.0
+        sections.extend([
+            "<h3>Agent Performance</h3>",
+            "<ul>",
+            f"<li>User overrides (corrections): {override_count}</li>",
+            f"<li>Accuracy rate: {accuracy:.1f}%</li>",
+            "</ul>",
+        ])
+        if overrides:
+            from collections import Counter
+            override_senders = Counter(o.get("sender", "unknown") for o in overrides)
+            top_corrected = override_senders.most_common(5)
+            if top_corrected:
+                sections.append("<p>Most corrected senders:</p><ul>")
+                for sender, cnt in top_corrected:
+                    sections.append(f"<li>{sender}: {cnt} corrections</li>")
+                sections.append("</ul>")
 
         if crawl_state and not crawl_state.is_complete:
             pct = 0.0

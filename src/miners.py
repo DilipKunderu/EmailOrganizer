@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import re
 from collections import Counter, defaultdict
@@ -28,10 +29,8 @@ class SenderMiner:
 
         sender_groups: dict[str, list[str]] = defaultdict(list)
         for a in llm_actions:
-            if a.action_type == "label" and a.label_name:
-                sender = a.reason.split("sender=")[-1] if "sender=" in a.reason else ""
-                if sender:
-                    sender_groups[sender].append(a.label_name)
+            if a.action_type == "label" and a.label_name and a.sender:
+                sender_groups[a.sender].append(a.label_name)
 
         candidates: list[AutoRule] = []
         for sender, classifications in sender_groups.items():
@@ -140,22 +139,43 @@ class OverrideMiner:
 
     async def mine(self) -> list[AutoRule]:
         overrides = await self._store.get_overrides(self._tenant, limit=1000)
-        sender_counts: dict[str, int] = Counter(o.get("sender", "") for o in overrides if o.get("sender"))
-        candidates: list[AutoRule] = []
-        for sender, count in sender_counts.items():
-            if count < 2 or not sender:
+
+        sender_data: dict[str, list[str]] = defaultdict(list)
+        for o in overrides:
+            sender = o.get("sender", "")
+            if not sender:
                 continue
+            details = o.get("details", "")
+            try:
+                detail_obj = json.loads(details) if details else {}
+            except (json.JSONDecodeError, TypeError):
+                detail_obj = {}
+            user_label = detail_obj.get("user_added_label", "")
+            if user_label:
+                sender_data[sender].append(user_label)
+            else:
+                sender_data[sender].append("")
+
+        candidates: list[AutoRule] = []
+        for sender, labels in sender_data.items():
+            if len(labels) < 2:
+                continue
+            non_empty = [l for l in labels if l]
+            if non_empty:
+                classification = Counter(non_empty).most_common(1)[0][0]
+            else:
+                classification = "Personal"
             rule_id = f"auto_override_{hashlib.md5(sender.encode()).hexdigest()[:12]}"
             candidates.append(AutoRule(
                 id=rule_id,
                 type="sender",
                 pattern=re.escape(sender),
-                classification="Personal",
+                classification=classification,
                 actions=["label"],
                 status="candidate",
                 confidence=0.95,
                 source=AutoRuleSource.USER_OVERRIDE.value,
-                evidence_count=count,
+                evidence_count=len(labels),
                 created_at=datetime.now(timezone.utc).isoformat(),
                 last_validated=datetime.now(timezone.utc).isoformat(),
             ))

@@ -35,6 +35,8 @@ class Guardrails:
         self._destructive_this_run = 0
 
     async def is_dry_run_active(self) -> bool:
+        if self._settings.dry_run_days <= 0:
+            return False
         start = await self._store.get_sync_value(self._tenant, "dry_run_start")
         if not start:
             await self._store.set_sync_value(
@@ -83,11 +85,14 @@ class Guardrails:
             logger.warning("Daily destructive cap reached (%d)", daily_count)
             return ActionStatus.QUARANTINE
 
-        # Level 2-3: quarantine
         self._destructive_this_run += 1
+
+        # Level 3: always quarantine first
         if action.risk_level >= RiskLevel.HIGH:
             return ActionStatus.QUARANTINE
-        return ActionStatus.QUARANTINE
+
+        # Level 2: execute (passed circuit breaker + daily cap checks)
+        return ActionStatus.EXECUTED
 
     def reset_run_counters(self) -> None:
         self._destructive_this_run = 0

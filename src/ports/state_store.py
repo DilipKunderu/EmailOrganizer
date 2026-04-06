@@ -32,6 +32,7 @@ class StateStorePort(ABC):
         classification: str,
         classified_by: str,
         confidence: float,
+        applied_labels: list[str] | None = None,
     ) -> None: ...
 
     @abstractmethod
@@ -69,6 +70,18 @@ class StateStorePort(ABC):
     async def count_actions_today(
         self, tenant_id: str, min_risk_level: int
     ) -> int: ...
+
+    @abstractmethod
+    async def get_quarantined_expired(
+        self, tenant_id: str, max_age_days: int
+    ) -> list[ActionRecord]:
+        """Get quarantined actions older than max_age_days."""
+
+    @abstractmethod
+    async def get_actions_for_thread(
+        self, tenant_id: str, thread_id: str
+    ) -> list[ActionRecord]:
+        """Get all agent-applied actions for a specific thread."""
 
     # -- Sender stats --
 

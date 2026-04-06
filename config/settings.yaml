@@ -42,12 +42,12 @@ digest:
   timezone: local
 
 llm:
-  provider: none  # openai | anthropic | ollama | llamacpp | none
-  model: ""
+  provider: openai  # openai | anthropic | ollama | llamacpp | none
+  model: gpt-4o-mini
   endpoint: ""
-  api_key_env: ""
+  api_key_env: OPENAI_API_KEY
   temperature: 0.1
-  max_tokens: 512
+  max_tokens: 256
   timeout_seconds: 30
   fallback: none
   send_body: false

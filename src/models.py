@@ -163,6 +163,8 @@ class ActionRecord:
     classified_by: str = ""
     label_name: str | None = None
     reversal_data: str | None = None
+    sender: str = ""
+    sender_domain: str = ""
     created_at: str = ""
 
 
@@ -174,8 +176,13 @@ class SenderStats:
     total_received: int = 0
     opened: int = 0
     replied: int = 0
+    starred: int = 0
+    manually_archived: int = 0
+    trashed: int = 0
+    spam_marked: int = 0
     engagement_score: float = 0.0
     blocklisted: bool = False
+    first_seen_at: str = ""
     last_updated: str = ""
 
 
