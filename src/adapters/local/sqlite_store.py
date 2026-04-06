@@ -148,6 +148,12 @@ class SQLiteStateStore(StateStorePort):
 
     async def initialize(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
+        # Clean orphaned WAL/SHM files if the main DB doesn't exist
+        if str(self._path) != ":memory:" and not self._path.exists():
+            for suffix in ("-wal", "-shm"):
+                orphan = Path(str(self._path) + suffix)
+                if orphan.exists():
+                    orphan.unlink()
         self._db = await aiosqlite.connect(str(self._path))
         self._db.row_factory = aiosqlite.Row
         await self._db.execute("PRAGMA journal_mode=WAL")
