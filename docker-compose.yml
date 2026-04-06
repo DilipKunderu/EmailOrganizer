@@ -1,0 +1,49 @@
+services:
+  agent:
+    build: .
+    command: ["python", "-m", "src.main", "--mode", "cloud"]
+    environment:
+      - DEPLOY_MODE=cloud
+      - DATABASE_URL=postgresql://emailorg:emailorg@db:5432/emailorganizer
+      - MAIL_NOTIFIER=imap_idle
+      - LLM_PROVIDER=${LLM_PROVIDER:-none}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      retries: 3
+      start_period: 15s
+
+  learner:
+    build: .
+    command: ["python", "-m", "src.main", "--learn-now", "--mode", "cloud"]
+    environment:
+      - DEPLOY_MODE=cloud
+      - DATABASE_URL=postgresql://emailorg:emailorg@db:5432/emailorganizer
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  db:
+    image: postgres:16-alpine
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_DB=emailorganizer
+      - POSTGRES_USER=emailorg
+      - POSTGRES_PASSWORD=emailorg
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U emailorg -d emailorganizer"]
+      interval: 5s
+      retries: 5
+
+volumes:
+  pgdata:

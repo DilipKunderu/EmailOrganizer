@@ -1,0 +1,65 @@
+deploy_mode: local  # local | cloud
+
+daemon:
+  memory_cap_mb: 256
+
+live_sync:
+  imap_idle_reissue_minutes: 25
+  fallback_poll_minutes: 5
+
+crawl:
+  batch_size: 25
+  interval_minutes: 10
+  time_budget_seconds: 60
+  order: newest_first  # newest_first | oldest_first
+  skip_if_live_sync_exceeds: 50
+  archive_age_days: 30
+  star_max_age_days: 7
+
+labels:
+  max_custom: 15
+
+engagement:
+  score_window_days: 90
+
+unsubscribe:
+  tier1_min_emails: 3
+  tier2_min_emails: 5
+  tier2_max_engagement: 0.1
+  tier3_max_engagement: 0.3
+  persistence_check_days: 7
+  quarantine_hold_days: 2
+
+guardrails:
+  dry_run_days: 7
+  confidence_threshold: 0.7
+  quarantine_hold_days: 3
+  circuit_breaker_threshold: 20
+  daily_destructive_cap: 25
+
+digest:
+  time: "08:00"
+  timezone: local
+
+llm:
+  provider: none  # openai | anthropic | ollama | llamacpp | none
+  model: ""
+  endpoint: ""
+  api_key_env: ""
+  temperature: 0.1
+  max_tokens: 512
+  timeout_seconds: 30
+  fallback: none
+  send_body: false
+  max_calls_per_run: 50
+
+learner:
+  schedule: daily
+  auto_promote_confidence: 0.98
+  auto_promote_min_evidence: 10
+  staging_days: 7
+  revalidation_window_days: 30
+  deprecation_accuracy: 0.90
+  sender_min_threads: 5
+  domain_min_senders: 3
+  keyword_min_correlation: 0.90

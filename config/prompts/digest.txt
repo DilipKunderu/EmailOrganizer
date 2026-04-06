@@ -1,0 +1,17 @@
+Summarize the following email organizer activity from the past 24 hours in a concise, human-readable format. Use bullet points. Keep it under 200 words.
+
+Activity data:
+- Threads processed: {threads_processed}
+- Labels applied: {labels_applied}
+- Threads archived: {threads_archived}
+- Threads starred: {threads_starred}
+- Unsubscribes executed: {unsubscribes_executed}
+- Unsubscribes pending: {unsubscribes_pending}
+- Quarantined threads: {quarantined}
+- Dry-run actions (not executed): {dry_run_count}
+- LLM calls made: {llm_calls}
+- LLM dependency ratio: {llm_dependency_pct}%
+- New auto-rules promoted: {rules_promoted}
+- Crawl progress: {crawl_pct}%
+
+Write a brief narrative summary highlighting the most important actions taken.
