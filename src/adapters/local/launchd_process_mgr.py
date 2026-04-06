@@ -18,6 +18,19 @@ LEARNER_LABEL = "com.emailorganizer.learner"
 STATUS_PATH = Path("~/.emailorganizer/status.json").expanduser()
 LOG_DIR = Path("~/.emailorganizer/logs").expanduser()
 
+# Long-running daemons: restart on exit
+_KEEPALIVE_LABELS = {
+    "com.emailorganizer.agent",
+    "com.emailorganizer.crawl",
+}
+
+# Timer-based services: run on schedule, exit, wait for next interval
+_TIMER_INTERVALS = {
+    "com.emailorganizer.learner": 86400,   # daily (24h)
+    "com.emailorganizer.janitor": 3600,    # hourly
+    "com.emailorganizer.digest": 86400,    # daily (24h)
+}
+
 
 class LaunchdProcessManager(ProcessManagerPort):
     def __init__(self, label: str = AGENT_LABEL):
@@ -25,18 +38,29 @@ class LaunchdProcessManager(ProcessManagerPort):
 
     async def install_service(self, executable_path: str, args: list[str]) -> None:
         LOG_DIR.mkdir(parents=True, exist_ok=True)
-        plist = {
+        log_name = self._label.rsplit(".", 1)[-1]
+        plist: dict = {
             "Label": self._label,
             "ProgramArguments": [sys.executable, "-m", "src.main"] + args,
             "WorkingDirectory": str(Path.cwd()),
-            "RunAtLoad": True,
-            "KeepAlive": True,
-            "ThrottleInterval": 10,
-            "StandardOutPath": str(LOG_DIR / "stdout.log"),
-            "StandardErrorPath": str(LOG_DIR / "stderr.log"),
+            "StandardOutPath": str(LOG_DIR / f"{log_name}-stdout.log"),
+            "StandardErrorPath": str(LOG_DIR / f"{log_name}-stderr.log"),
             "ProcessType": "Background",
             "SoftResourceLimits": {"NumberOfFiles": 1024},
         }
+
+        if self._label in _KEEPALIVE_LABELS:
+            plist["KeepAlive"] = True
+            plist["RunAtLoad"] = True
+            plist["ThrottleInterval"] = 10
+        elif self._label in _TIMER_INTERVALS:
+            plist["StartInterval"] = _TIMER_INTERVALS[self._label]
+            plist["RunAtLoad"] = True
+        else:
+            plist["KeepAlive"] = True
+            plist["RunAtLoad"] = True
+            plist["ThrottleInterval"] = 10
+
         plist_path = PLIST_DIR / f"{self._label}.plist"
         PLIST_DIR.mkdir(parents=True, exist_ok=True)
         with open(plist_path, "wb") as f:
