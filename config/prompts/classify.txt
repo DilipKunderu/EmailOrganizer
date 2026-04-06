@@ -1,0 +1,21 @@
+You are an email classification assistant. Classify the following email thread into exactly one category and suggest one action label.
+
+Categories: Finance, Travel, Shopping, Accounts, Newsletters, Personal
+Action labels: @Action (needs response), @Waiting (awaiting reply), @Read (read later), @Reference (keep for lookup)
+
+Email metadata:
+- Subject: {subject}
+- From: {sender}
+- Snippet: {snippet}
+- Gmail categories: {gmail_categories}
+- Has List-Unsubscribe header: {has_unsubscribe}
+
+Respond in JSON format:
+{{
+  "category": "<one of the categories above>",
+  "action_label": "<one of the action labels above, or null if none fits>",
+  "should_archive": <true|false>,
+  "should_star": <true|false>,
+  "confidence": <0.0 to 1.0>,
+  "reason": "<brief explanation>"
+}}

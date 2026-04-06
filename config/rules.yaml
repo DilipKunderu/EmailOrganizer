@@ -1,0 +1,57 @@
+allowlist:
+  domains: []
+  # - mycompany.com
+  addresses: []
+  # - important@example.com
+
+blocklist:
+  domains: []
+  addresses: []
+
+rules:
+  # Sender-based rules
+  - type: sender
+    pattern: "noreply@.*\\.gov"
+    classification: Accounts
+    actions: [label]
+    confidence: 0.9
+
+  # Domain-based rules
+  - type: domain
+    pattern: ".*\\.edu"
+    classification: Personal
+    actions: [label]
+    confidence: 0.7
+
+  # Keyword rules (matched against subject)
+  - type: keyword
+    pattern: "invoice|receipt|payment|billing"
+    classification: Finance
+    actions: [label]
+    action_label: "@Reference"
+    confidence: 0.85
+
+  - type: keyword
+    pattern: "flight|booking|itinerary|boarding pass|hotel confirmation"
+    classification: Travel
+    actions: [label]
+    action_label: "@Reference"
+    confidence: 0.85
+
+  - type: keyword
+    pattern: "order confirmed|shipped|delivered|tracking"
+    classification: Shopping
+    actions: [label, archive]
+    confidence: 0.80
+
+  - type: keyword
+    pattern: "password reset|verify your email|two-factor|2fa|security code"
+    classification: Accounts
+    actions: [label, archive]
+    confidence: 0.90
+
+  - type: keyword
+    pattern: "unsubscribe"
+    classification: Newsletters
+    actions: [label]
+    confidence: 0.60
