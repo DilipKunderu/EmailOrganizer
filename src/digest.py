@@ -7,6 +7,7 @@ from typing import Any
 from src.gmail_client import GmailClient
 from src.llm_provider import LLMProviderChain
 from src.models import ActionRecord, CrawlState, DEFAULT_TENANT_ID, Settings
+from src.ports.config_loader import ConfigLoaderPort
 from src.ports.state_store import StateStorePort
 
 logger = logging.getLogger(__name__)
@@ -22,12 +23,14 @@ class DigestBuilder:
         llm_chain: LLMProviderChain,
         settings: Settings,
         tenant_id: str = DEFAULT_TENANT_ID,
+        config_loader: ConfigLoaderPort | None = None,
     ):
         self._gmail = gmail
         self._store = state_store
         self._llm = llm_chain
         self._settings = settings
         self._tenant = tenant_id
+        self._config = config_loader
 
     async def should_send(self) -> bool:
         last_sent = await self._store.get_sync_value(self._tenant, "last_digest_sent")
@@ -54,12 +57,11 @@ class DigestBuilder:
                                  dependency_trend, crawl_state, recent_overrides)
 
         digest_prompt = ""
-        try:
-            from src.adapters.local.file_config_loader import FileConfigLoader
-            loader = FileConfigLoader()
-            digest_prompt = await loader.load_prompt("digest")
-        except Exception:
-            pass
+        if self._config:
+            try:
+                digest_prompt = await self._config.load_prompt("digest")
+            except Exception:
+                pass
 
         llm_summary = ""
         if digest_prompt and self._settings.llm_provider != "none":

@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import json
 import logging
+import os
+import signal as signal_mod
 from datetime import datetime, timezone
+from pathlib import Path
 
 from src.backtester import Backtester
 from src.miners import DomainMiner, EngagementMiner, OverrideMiner, SenderMiner
@@ -77,6 +81,9 @@ class RuleLearner:
         # Write updated auto-rules to config
         await self._sync_to_config()
 
+        # Notify live sync daemon to reload rules
+        self._signal_daemon_reload()
+
         # Update LLM dependency ratio
         await self._update_dependency_ratio()
 
@@ -150,3 +157,21 @@ class RuleLearner:
         ratio = (llm_count / total) * 100
         date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         await self._store.record_llm_dependency(self._tenant, date_str, ratio)
+
+    @staticmethod
+    def _signal_daemon_reload() -> None:
+        """Send SIGHUP to the live sync daemon to reload rules."""
+        status_path = Path("~/.emailorganizer/status.json").expanduser()
+        if not status_path.exists():
+            logger.debug("No daemon status file found, skipping SIGHUP")
+            return
+        try:
+            data = json.loads(status_path.read_text())
+            pid = data.get("pid", 0)
+            if pid and pid != os.getpid():
+                os.kill(pid, signal_mod.SIGHUP)
+                logger.info("Sent SIGHUP to live sync daemon (pid=%d)", pid)
+        except (ProcessLookupError, PermissionError):
+            logger.debug("Daemon process not found, skipping SIGHUP")
+        except Exception as exc:
+            logger.warning("Failed to signal daemon: %s", exc)
