@@ -188,6 +188,51 @@ class StateStorePort(ABC):
         self, tenant_id: str, days: int = 30
     ) -> list[dict[str, Any]]: ...
 
+    # -- Classification feedback --
+
+    @abstractmethod
+    async def record_feedback(
+        self, tenant_id: str, thread_id: str, sender: str,
+        original_category: str, original_action_label: str, original_source: str,
+        corrected_category: str, corrected_action_label: str,
+        feedback_type: str,
+    ) -> None: ...
+
+    @abstractmethod
+    async def get_confusion_matrix(
+        self, tenant_id: str, since: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Returns [{predicted, actual, count}] pairs."""
+
+    @abstractmethod
+    async def get_accuracy_by_category(
+        self, tenant_id: str, since: str | None = None
+    ) -> dict[str, dict[str, Any]]:
+        """Per-category {total, correct, accuracy}."""
+
+    @abstractmethod
+    async def get_accuracy_by_source(
+        self, tenant_id: str, since: str | None = None
+    ) -> dict[str, dict[str, Any]]:
+        """Per-source {total, feedback_count, accuracy}."""
+
+    @abstractmethod
+    async def get_confidence_buckets(
+        self, tenant_id: str
+    ) -> list[dict[str, Any]]:
+        """Confidence calibration: [{bucket, total, with_feedback, accuracy}]."""
+
+    @abstractmethod
+    async def save_accuracy_daily(
+        self, tenant_id: str, date: str, overall: float,
+        by_category: str, by_source: str, confusion: str, total_feedback: int,
+    ) -> None: ...
+
+    @abstractmethod
+    async def get_accuracy_trend(
+        self, tenant_id: str, days: int = 30
+    ) -> list[dict[str, Any]]: ...
+
     # -- Aggregations for learner / digest --
 
     @abstractmethod

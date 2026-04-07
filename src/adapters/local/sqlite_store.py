@@ -130,6 +130,40 @@ CREATE INDEX IF NOT EXISTS idx_action_log_run
     ON action_log(tenant_id, run_id);
 CREATE INDEX IF NOT EXISTS idx_sender_stats_engagement
     ON sender_stats(tenant_id, engagement_score);
+
+CREATE TABLE IF NOT EXISTS classification_feedback (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id TEXT NOT NULL DEFAULT 'default',
+    thread_id TEXT NOT NULL,
+    sender TEXT,
+    original_category TEXT,
+    original_action_label TEXT,
+    original_source TEXT,
+    corrected_category TEXT,
+    corrected_action_label TEXT,
+    feedback_type TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS accuracy_daily (
+    tenant_id TEXT NOT NULL DEFAULT 'default',
+    date TEXT NOT NULL,
+    overall_accuracy REAL,
+    accuracy_by_category TEXT,
+    accuracy_by_source TEXT,
+    confusion_top5 TEXT,
+    total_feedback INTEGER DEFAULT 0,
+    PRIMARY KEY (tenant_id, date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_feedback_tenant_created
+    ON classification_feedback(tenant_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_feedback_tenant_thread
+    ON classification_feedback(tenant_id, thread_id);
+CREATE INDEX IF NOT EXISTS idx_processed_classified_by
+    ON processed_threads(tenant_id, classified_by);
+CREATE INDEX IF NOT EXISTS idx_overrides_created
+    ON user_overrides(tenant_id, created_at);
 """
 
 
@@ -579,6 +613,179 @@ class SQLiteStateStore(StateStorePort):
                 (tenant_id,),
             )
         return {row["classified_by"]: row["cnt"] for row in await cur.fetchall()}
+
+    # -- Classification feedback --
+
+    async def record_feedback(
+        self, tenant_id: str, thread_id: str, sender: str,
+        original_category: str, original_action_label: str, original_source: str,
+        corrected_category: str, corrected_action_label: str,
+        feedback_type: str,
+    ) -> None:
+        await self.db.execute(
+            """INSERT INTO classification_feedback
+               (tenant_id, thread_id, sender, original_category, original_action_label,
+                original_source, corrected_category, corrected_action_label,
+                feedback_type, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (tenant_id, thread_id, sender, original_category, original_action_label,
+             original_source, corrected_category, corrected_action_label,
+             feedback_type, _now()),
+        )
+        await self.db.commit()
+
+    async def get_confusion_matrix(
+        self, tenant_id: str, since: str | None = None
+    ) -> list[dict[str, Any]]:
+        if since:
+            cur = await self.db.execute(
+                """SELECT original_category AS predicted, corrected_category AS actual,
+                          COUNT(*) AS cnt
+                   FROM classification_feedback
+                   WHERE tenant_id=? AND created_at >= ?
+                     AND corrected_category IS NOT NULL AND corrected_category != ''
+                   GROUP BY original_category, corrected_category
+                   ORDER BY cnt DESC""",
+                (tenant_id, since),
+            )
+        else:
+            cur = await self.db.execute(
+                """SELECT original_category AS predicted, corrected_category AS actual,
+                          COUNT(*) AS cnt
+                   FROM classification_feedback
+                   WHERE tenant_id=?
+                     AND corrected_category IS NOT NULL AND corrected_category != ''
+                   GROUP BY original_category, corrected_category
+                   ORDER BY cnt DESC""",
+                (tenant_id,),
+            )
+        return [dict(r) for r in await cur.fetchall()]
+
+    async def get_accuracy_by_category(
+        self, tenant_id: str, since: str | None = None
+    ) -> dict[str, dict[str, Any]]:
+        where = "WHERE p.tenant_id=?"
+        params: list[Any] = [tenant_id]
+        if since:
+            where += " AND p.updated_at >= ?"
+            params.append(since)
+
+        cur = await self.db.execute(
+            f"""SELECT p.classification AS cat,
+                       COUNT(*) AS total,
+                       COUNT(f.id) AS feedback_count
+                FROM processed_threads p
+                LEFT JOIN classification_feedback f
+                  ON p.tenant_id = f.tenant_id AND p.thread_id = f.thread_id
+                {where}
+                GROUP BY p.classification""",
+            params,
+        )
+        result: dict[str, dict[str, Any]] = {}
+        for row in await cur.fetchall():
+            cat = row["cat"] or "Unknown"
+            total = row["total"]
+            fb = row["feedback_count"]
+            result[cat] = {
+                "total": total,
+                "feedback_count": fb,
+                "accuracy": ((total - fb) / total * 100) if total > 0 else 100.0,
+            }
+        return result
+
+    async def get_accuracy_by_source(
+        self, tenant_id: str, since: str | None = None
+    ) -> dict[str, dict[str, Any]]:
+        where = "WHERE p.tenant_id=?"
+        params: list[Any] = [tenant_id]
+        if since:
+            where += " AND p.updated_at >= ?"
+            params.append(since)
+
+        cur = await self.db.execute(
+            f"""SELECT p.classified_by AS src,
+                       COUNT(*) AS total,
+                       COUNT(f.id) AS feedback_count
+                FROM processed_threads p
+                LEFT JOIN classification_feedback f
+                  ON p.tenant_id = f.tenant_id AND p.thread_id = f.thread_id
+                {where}
+                GROUP BY p.classified_by""",
+            params,
+        )
+        result: dict[str, dict[str, Any]] = {}
+        for row in await cur.fetchall():
+            src = row["src"] or "unknown"
+            total = row["total"]
+            fb = row["feedback_count"]
+            result[src] = {
+                "total": total,
+                "feedback_count": fb,
+                "accuracy": ((total - fb) / total * 100) if total > 0 else 100.0,
+            }
+        return result
+
+    async def get_confidence_buckets(
+        self, tenant_id: str
+    ) -> list[dict[str, Any]]:
+        cur = await self.db.execute(
+            """SELECT
+                 CASE
+                   WHEN p.confidence < 0.5 THEN '0.0-0.5'
+                   WHEN p.confidence < 0.7 THEN '0.5-0.7'
+                   WHEN p.confidence < 0.9 THEN '0.7-0.9'
+                   ELSE '0.9-1.0'
+                 END AS bucket,
+                 COUNT(*) AS total,
+                 COUNT(f.id) AS with_feedback
+               FROM processed_threads p
+               LEFT JOIN classification_feedback f
+                 ON p.tenant_id = f.tenant_id AND p.thread_id = f.thread_id
+               WHERE p.tenant_id=?
+               GROUP BY bucket
+               ORDER BY bucket""",
+            (tenant_id,),
+        )
+        results: list[dict[str, Any]] = []
+        for row in await cur.fetchall():
+            total = row["total"]
+            fb = row["with_feedback"]
+            results.append({
+                "bucket": row["bucket"],
+                "total": total,
+                "with_feedback": fb,
+                "accuracy": ((total - fb) / total * 100) if total > 0 else 100.0,
+            })
+        return results
+
+    async def save_accuracy_daily(
+        self, tenant_id: str, date: str, overall: float,
+        by_category: str, by_source: str, confusion: str, total_feedback: int,
+    ) -> None:
+        await self.db.execute(
+            """INSERT INTO accuracy_daily
+               (tenant_id, date, overall_accuracy, accuracy_by_category,
+                accuracy_by_source, confusion_top5, total_feedback)
+               VALUES (?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(tenant_id, date) DO UPDATE SET
+                 overall_accuracy=excluded.overall_accuracy,
+                 accuracy_by_category=excluded.accuracy_by_category,
+                 accuracy_by_source=excluded.accuracy_by_source,
+                 confusion_top5=excluded.confusion_top5,
+                 total_feedback=excluded.total_feedback""",
+            (tenant_id, date, overall, by_category, by_source, confusion, total_feedback),
+        )
+        await self.db.commit()
+
+    async def get_accuracy_trend(
+        self, tenant_id: str, days: int = 30
+    ) -> list[dict[str, Any]]:
+        cur = await self.db.execute(
+            """SELECT * FROM accuracy_daily
+               WHERE tenant_id=? ORDER BY date DESC LIMIT ?""",
+            (tenant_id, days),
+        )
+        return [dict(r) for r in await cur.fetchall()]
 
     # -- Row converters --
 

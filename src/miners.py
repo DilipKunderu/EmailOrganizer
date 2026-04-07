@@ -130,6 +130,65 @@ class EngagementMiner:
         return candidates
 
 
+class KeywordMiner:
+    """Discover keyword-based rules from subject-line patterns in LLM-classified threads."""
+
+    def __init__(self, store: StateStorePort, settings: Settings, tenant_id: str = DEFAULT_TENANT_ID):
+        self._store = store
+        self._settings = settings
+        self._tenant = tenant_id
+
+    async def mine(self) -> list[AutoRule]:
+        actions = await self._store.get_actions(self._tenant, limit=10000)
+        llm_actions = [
+            a for a in actions
+            if a.classified_by == "llm" and a.action_type == "label"
+            and a.label_name and a.reason
+        ]
+
+        # Extract tokens from reasons/subjects, group by classification
+        token_class_counts: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+        token_total: dict[str, int] = defaultdict(int)
+        stop_words = {"the", "a", "an", "is", "are", "was", "were", "your", "you",
+                      "to", "from", "for", "in", "on", "at", "of", "and", "or",
+                      "has", "have", "been", "this", "that", "with", "not", "no"}
+
+        for a in llm_actions:
+            words = re.findall(r'\b[a-zA-Z]{3,}\b', a.reason.lower())
+            unique_words = set(words) - stop_words
+            for word in unique_words:
+                token_class_counts[word][a.label_name] += 1
+                token_total[word] += 1
+
+        candidates: list[AutoRule] = []
+        min_correlation = self._settings.learner_keyword_min_correlation
+        min_evidence = 5
+
+        for token, class_counts in token_class_counts.items():
+            total = token_total[token]
+            if total < min_evidence:
+                continue
+            top_class, top_count = Counter(class_counts).most_common(1)[0]
+            correlation = top_count / total
+            if correlation >= min_correlation:
+                rule_id = f"auto_kw_{hashlib.md5(token.encode()).hexdigest()[:12]}"
+                candidates.append(AutoRule(
+                    id=rule_id,
+                    type="keyword",
+                    pattern=re.escape(token),
+                    classification=top_class,
+                    actions=["label"],
+                    status="candidate",
+                    confidence=correlation,
+                    source=AutoRuleSource.KEYWORD.value,
+                    evidence_count=total,
+                    created_at=datetime.now(timezone.utc).isoformat(),
+                    last_validated=datetime.now(timezone.utc).isoformat(),
+                ))
+
+        return candidates
+
+
 class OverrideMiner:
     """Generate rules from repeated user corrections."""
 

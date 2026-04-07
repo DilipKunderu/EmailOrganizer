@@ -1,0 +1,24 @@
+---
+description: Enforce single responsibility for modules, classes, and functions
+alwaysApply: true
+---
+
+# Single Responsibility Principle (SRP)
+
+Each unit of code should have **one clear reason to change**—one job, one concern.
+
+## Apply consistently
+
+- **Modules / files**: One primary purpose (e.g. one feature area, one integration, or one layer). Split when a file mixes unrelated concerns (e.g. HTTP + DB + business rules in one place).
+- **Classes / types**: Represent one concept or role. Prefer composition over a class that does many unrelated things.
+- **Functions**: Do one thing at one level of abstraction. If the name needs “and”, consider splitting or extracting helpers.
+
+## When editing
+
+- Prefer **small, focused** changes that keep boundaries clear rather than growing “god” modules.
+- When adding behavior, ask whether it belongs in the existing unit or a **new** one with a narrow name.
+- Reuse through **well-named** abstractions; avoid duplicating the same responsibility across many places.
+
+## Quick check
+
+Before finishing a change: *If this unit’s responsibility were described in one sentence, would that sentence stay crisp?* If not, split or extract.

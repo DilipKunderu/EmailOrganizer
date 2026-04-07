@@ -53,8 +53,18 @@ class DigestBuilder:
         llm_count = class_counts.get("llm", 0)
         llm_pct = (llm_count / total) * 100
 
+        # Accuracy analysis
+        accuracy_data: dict[str, Any] = {}
+        try:
+            from src.accuracy import ConfusionAnalyzer
+            analyzer = ConfusionAnalyzer(self._store, self._tenant)
+            accuracy_data = await analyzer.analyze(since)
+        except Exception:
+            pass
+
         html = self._render_html(actions, llm_usage, class_counts, llm_pct,
-                                 dependency_trend, crawl_state, recent_overrides)
+                                 dependency_trend, crawl_state, recent_overrides,
+                                 accuracy_data)
 
         digest_prompt = ""
         if self._config:
@@ -92,6 +102,7 @@ class DigestBuilder:
         dependency_trend: list[dict[str, Any]],
         crawl_state: CrawlState | None,
         overrides: list[dict[str, Any]] | None = None,
+        accuracy_data: dict[str, Any] | None = None,
     ) -> str:
         executed = [a for a in actions if a.status == "executed"]
         dry_run = [a for a in actions if a.status == "dry_run"]
@@ -141,25 +152,68 @@ class DigestBuilder:
             sections.append("</ul>")
 
         # Agent performance section
-        override_count = len(overrides) if overrides else 0
-        total_executed = len(executed)
-        accuracy = ((total_executed - override_count) / total_executed * 100) if total_executed > 0 else 100.0
-        sections.extend([
-            "<h3>Agent Performance</h3>",
-            "<ul>",
-            f"<li>User overrides (corrections): {override_count}</li>",
-            f"<li>Accuracy rate: {accuracy:.1f}%</li>",
-            "</ul>",
-        ])
-        if overrides:
-            from collections import Counter
-            override_senders = Counter(o.get("sender", "unknown") for o in overrides)
-            top_corrected = override_senders.most_common(5)
-            if top_corrected:
-                sections.append("<p>Most corrected senders:</p><ul>")
-                for sender, cnt in top_corrected:
-                    sections.append(f"<li>{sender}: {cnt} corrections</li>")
+        if accuracy_data:
+            overall_acc = accuracy_data.get("overall_accuracy", 100.0)
+            total_fb = accuracy_data.get("total_feedback", 0)
+            sections.extend([
+                "<h3>Agent Performance</h3>",
+                "<ul>",
+                f"<li>Overall accuracy: {overall_acc:.1f}%</li>",
+                f"<li>Total corrections: {total_fb}</li>",
+                "</ul>",
+            ])
+
+            by_cat = accuracy_data.get("by_category", {})
+            if by_cat:
+                sections.append("<h4>Accuracy by Category</h4><ul>")
+                for cat, data in sorted(by_cat.items(), key=lambda x: x[1].get("accuracy", 100)):
+                    sections.append(
+                        f"<li>{cat}: {data.get('accuracy', 100):.1f}% "
+                        f"({data.get('feedback_count', 0)} corrections / {data.get('total', 0)} total)</li>"
+                    )
                 sections.append("</ul>")
+
+            by_src = accuracy_data.get("by_source", {})
+            if by_src:
+                sections.append("<h4>Accuracy by Source</h4><ul>")
+                for src, data in sorted(by_src.items(), key=lambda x: x[1].get("accuracy", 100)):
+                    sections.append(
+                        f"<li>{src}: {data.get('accuracy', 100):.1f}% "
+                        f"({data.get('feedback_count', 0)} corrections / {data.get('total', 0)} total)</li>"
+                    )
+                sections.append("</ul>")
+
+            confusion = accuracy_data.get("top_confusion_pairs", [])
+            if confusion:
+                sections.append("<h4>Top Confusion Pairs</h4><ul>")
+                for pair in confusion[:5]:
+                    sections.append(
+                        f"<li>{pair.get('predicted', '?')} misclassified as "
+                        f"{pair.get('actual', '?')}: {pair.get('cnt', 0)} times</li>"
+                    )
+                sections.append("</ul>")
+
+            calibration = accuracy_data.get("confidence_calibration", [])
+            if calibration:
+                sections.append("<h4>Confidence Calibration</h4><ul>")
+                for bucket in calibration:
+                    sections.append(
+                        f"<li>Confidence {bucket['bucket']}: "
+                        f"{bucket['accuracy']:.1f}% actual accuracy "
+                        f"({bucket['total']} classifications)</li>"
+                    )
+                sections.append("</ul>")
+        else:
+            override_count = len(overrides) if overrides else 0
+            total_executed = len(executed)
+            accuracy = ((total_executed - override_count) / total_executed * 100) if total_executed > 0 else 100.0
+            sections.extend([
+                "<h3>Agent Performance</h3>",
+                "<ul>",
+                f"<li>User overrides (corrections): {override_count}</li>",
+                f"<li>Accuracy rate: {accuracy:.1f}%</li>",
+                "</ul>",
+            ])
 
         if crawl_state and not crawl_state.is_complete:
             pct = 0.0

@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from src.backtester import Backtester
-from src.miners import DomainMiner, EngagementMiner, OverrideMiner, SenderMiner
+from src.miners import DomainMiner, EngagementMiner, KeywordMiner, OverrideMiner, SenderMiner
 from src.models import AutoRule, DEFAULT_TENANT_ID, Settings
 from src.ports.config_loader import ConfigLoaderPort
 from src.ports.state_store import StateStorePort
@@ -87,6 +87,10 @@ class RuleLearner:
         # Update LLM dependency ratio
         await self._update_dependency_ratio()
 
+        # Accuracy analysis + prompt tuning
+        await self._run_accuracy_analysis()
+        await self._run_prompt_tuning()
+
         logger.info("Rule learner completed: %s", stats)
         return stats
 
@@ -105,6 +109,9 @@ class RuleLearner:
 
         override_miner = OverrideMiner(self._store, self._tenant)
         candidates.extend(await override_miner.mine())
+
+        keyword_miner = KeywordMiner(self._store, self._settings, self._tenant)
+        candidates.extend(await keyword_miner.mine())
 
         return candidates
 
@@ -157,6 +164,24 @@ class RuleLearner:
         ratio = (llm_count / total) * 100
         date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         await self._store.record_llm_dependency(self._tenant, date_str, ratio)
+
+    async def _run_accuracy_analysis(self) -> None:
+        try:
+            from src.accuracy import ConfusionAnalyzer
+            analyzer = ConfusionAnalyzer(self._store, self._tenant)
+            await analyzer.persist_daily()
+        except Exception as exc:
+            logger.error("Accuracy analysis failed: %s", exc)
+
+    async def _run_prompt_tuning(self) -> None:
+        try:
+            from src.prompt_tuner import PromptTuner
+            tuner = PromptTuner(self._store, tenant_id=self._tenant)
+            version = await tuner.tune()
+            if version:
+                logger.info("Prompt tuned to version %s", version)
+        except Exception as exc:
+            logger.error("Prompt tuning failed: %s", exc)
 
     @staticmethod
     def _signal_daemon_reload() -> None:
