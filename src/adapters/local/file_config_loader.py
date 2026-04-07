@@ -78,6 +78,17 @@ class FileConfigLoader(ConfigLoaderPort):
         s.learner_domain_min_senders = lr.get("domain_min_senders", s.learner_domain_min_senders)
         s.learner_keyword_min_correlation = lr.get("keyword_min_correlation", s.learner_keyword_min_correlation)
 
+        inbox = raw.get("inbox", {})
+        s.inbox_mode = inbox.get("mode", s.inbox_mode)
+        s.inbox_archive_all_except = inbox.get("archive_all_except", s.inbox_archive_all_except)
+        s.inbox_mark_read_categories = inbox.get("mark_read_categories", s.inbox_mark_read_categories)
+        s.inbox_mark_read_keywords = inbox.get("mark_read_keywords", s.inbox_mark_read_keywords)
+        s.inbox_mark_important = inbox.get("mark_important", s.inbox_mark_important)
+        s.inbox_mark_not_important = inbox.get("mark_not_important", s.inbox_mark_not_important)
+        s.inbox_sync_gmail_filters = inbox.get("sync_gmail_filters", s.inbox_sync_gmail_filters)
+        s.inbox_filter_min_confidence = inbox.get("filter_min_confidence", s.inbox_filter_min_confidence)
+        s.inbox_filter_min_evidence = inbox.get("filter_min_evidence", s.inbox_filter_min_evidence)
+
         return s
 
     async def load_manual_rules(self) -> list[ManualRule]:

@@ -53,6 +53,17 @@ llm:
   send_body: false
   max_calls_per_run: 50
 
+inbox:
+  mode: priority  # priority | relaxed
+  archive_all_except: ["@Action", "@Waiting"]
+  mark_read_categories: ["Accounts"]
+  mark_read_keywords: ["shipped", "delivered", "receipt", "payment confirmed", "password reset", "2fa", "security code", "verification code"]
+  mark_important: ["@Action", "@Waiting", "@Read"]
+  mark_not_important: ["Newsletters", "Shopping", "Accounts"]
+  sync_gmail_filters: true
+  filter_min_confidence: 0.98
+  filter_min_evidence: 10
+
 learner:
   schedule: daily
   auto_promote_confidence: 0.98

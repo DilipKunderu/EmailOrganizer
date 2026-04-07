@@ -279,6 +279,18 @@ class Settings:
     llm_send_body: bool = False
     llm_max_calls_per_run: int = 50
     memory_cap_mb: int = 256
+    inbox_mode: str = "priority"
+    inbox_archive_all_except: list[str] = field(default_factory=lambda: ["@Action", "@Waiting"])
+    inbox_mark_read_categories: list[str] = field(default_factory=lambda: ["Accounts"])
+    inbox_mark_read_keywords: list[str] = field(default_factory=lambda: [
+        "shipped", "delivered", "receipt", "payment confirmed",
+        "password reset", "2fa", "security code",
+    ])
+    inbox_mark_important: list[str] = field(default_factory=lambda: ["@Action", "@Waiting", "@Read"])
+    inbox_mark_not_important: list[str] = field(default_factory=lambda: ["Newsletters", "Shopping", "Accounts"])
+    inbox_sync_gmail_filters: bool = True
+    inbox_filter_min_confidence: float = 0.98
+    inbox_filter_min_evidence: int = 10
     learner_auto_promote_confidence: float = 0.98
     learner_auto_promote_min_evidence: int = 10
     learner_staging_days: int = 7

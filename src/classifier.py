@@ -46,12 +46,12 @@ class HybridClassifier:
         # Stage 1: manual rules
         result = self._match_rules(meta, self._manual_rules, ClassifiedBy.MANUAL_RULE)
         if result and result.confidence >= self._settings.confidence_threshold:
-            return result
+            return self._ensure_action_label(result, meta)
 
         # Stage 2: auto-rules
         auto_result = self._match_auto_rules(meta)
         if auto_result and auto_result.confidence >= self._settings.confidence_threshold:
-            return auto_result
+            return self._ensure_action_label(auto_result, meta)
 
         best_rule_result = result or auto_result
 
@@ -60,12 +60,12 @@ class HybridClassifier:
             llm_result = await self._llm.classify_thread(meta, self._prompt)
             if llm_result and llm_result.confidence > 0:
                 llm_result.classified_by = ClassifiedBy.LLM
-                return llm_result
+                return self._ensure_action_label(llm_result, meta)
 
         # Fall back to best rule result (even if low confidence) or empty
         if best_rule_result:
-            return best_rule_result
-        return self._classify_by_gmail_category(meta)
+            return self._ensure_action_label(best_rule_result, meta)
+        return self._ensure_action_label(self._classify_by_gmail_category(meta), meta)
 
     def _match_rules(
         self,
@@ -126,25 +126,42 @@ class HybridClassifier:
     def _classify_by_gmail_category(meta: ThreadMetadata) -> Classification:
         """Last resort: use Gmail's built-in categories."""
         category_map = {
-            "CATEGORY_PROMOTIONS": ("Newsletters", True, False),
-            "CATEGORY_SOCIAL": ("Personal", False, False),
-            "CATEGORY_UPDATES": ("Accounts", True, False),
-            "CATEGORY_FORUMS": ("Newsletters", False, False),
-            "CATEGORY_PERSONAL": ("Personal", False, False),
+            "CATEGORY_PROMOTIONS": ("Newsletters", "@Reference"),
+            "CATEGORY_SOCIAL": ("Personal", "@Reference"),
+            "CATEGORY_UPDATES": ("Accounts", "@Reference"),
+            "CATEGORY_FORUMS": ("Newsletters", "@Read"),
+            "CATEGORY_PERSONAL": ("Personal", "@Reference"),
         }
         for cat_id in meta.gmail_categories:
             if cat_id in category_map:
-                cat_name, archive, star = category_map[cat_id]
+                cat_name, action_label = category_map[cat_id]
                 return Classification(
                     category=cat_name,
-                    should_archive=archive,
-                    should_star=star,
+                    action_label=action_label,
                     confidence=0.5,
                     reason=f"Gmail category: {cat_id}",
                     classified_by=ClassifiedBy.GMAIL_CATEGORY,
                 )
         return Classification(
+            action_label="@Reference",
             confidence=0.3,
             reason="No rule matched, no Gmail category",
             classified_by=ClassifiedBy.GMAIL_CATEGORY,
         )
+
+    @staticmethod
+    def _ensure_action_label(c: Classification, meta: ThreadMetadata) -> Classification:
+        """Guarantee every classification has an action label."""
+        if c.action_label:
+            return c
+        if c.category in ("Newsletters",):
+            c.action_label = "@Read" if not meta.has_unsubscribe else "@Reference"
+        elif c.category in ("Shopping", "Accounts"):
+            c.action_label = "@Reference"
+        elif c.category in ("Finance", "Travel"):
+            c.action_label = "@Reference"
+        elif c.category == "Personal":
+            c.action_label = "@Action"
+        else:
+            c.action_label = "@Reference"
+        return c

@@ -96,6 +96,52 @@ Six port interfaces with swappable adapters:
 - **LockManager**: fcntl.flock (local) / PG advisory locks (cloud)
 - **Auth**: single token file (local) / encrypted DB tokens (cloud)
 
+## Priority Inbox Setup (Recommended)
+
+The agent works best with Gmail's **Multiple Inboxes** feature, which turns your inbox into a priority dashboard.
+
+### Step 1: Enable Multiple Inboxes in Gmail
+
+1. Open Gmail on the web
+2. Click the gear icon (top right) > **See all settings**
+3. Go to the **Inbox** tab
+4. Set **Inbox type** to **Multiple Inboxes**
+5. Configure sections:
+
+| Section | Search query | Label |
+|---------|-------------|-------|
+| Section 1 | `label:@Action` | Action needed |
+| Section 2 | `label:@Waiting` | Waiting on others |
+| Section 3 | `label:@Read` | Reading list |
+
+6. Set **Multiple inbox position** to **Above the inbox**
+7. Save Changes
+
+### Step 2: How it works
+
+With priority mode enabled (default), the agent:
+
+- **Keeps in inbox**: only `@Action` and `@Waiting` threads (starred)
+- **Archives everything else**: `@Reference`, `@Read`, all category-only threads
+- **Marks as read**: shipping confirmations, account notifications, receipts
+- **Marks important**: `@Action`, `@Waiting`, `@Read` threads
+- **Marks not important**: Newsletters, Shopping, Accounts (trains Gmail's ML)
+- **Creates Gmail filters**: for high-confidence auto-rules, so Gmail handles them even when the agent is offline
+
+Your inbox shows only what needs your attention. Everything else is labeled and one click away.
+
+### Step 3: Adjust aggressiveness
+
+In `config/settings.yaml`:
+
+```yaml
+inbox:
+  mode: priority    # or "relaxed" for less aggressive behavior
+  archive_all_except: ["@Action", "@Waiting"]
+  mark_read_categories: ["Accounts"]
+  mark_read_keywords: ["shipped", "delivered", "receipt", "password reset"]
+```
+
 ## Cloud Deployment
 
 ```bash

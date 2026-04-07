@@ -283,6 +283,119 @@ class GmailClient:
         profile = self._service.users().getProfile(userId="me").execute()
         return str(profile["historyId"])
 
+    # -- Gmail filters --
+
+    def list_filters(self) -> list[dict]:
+        resp = self._service.users().settings().filters().list(userId="me").execute()
+        return resp.get("filter", [])
+
+    def create_filter(
+        self,
+        from_address: str,
+        add_labels: list[str] | None = None,
+        remove_labels: list[str] | None = None,
+        should_mark_read: bool = False,
+    ) -> dict | None:
+        """Create a Gmail server-side filter for a sender pattern."""
+        criteria = {"from": from_address}
+        action: dict = {}
+
+        label_ids_add = []
+        label_ids_remove = []
+
+        if add_labels:
+            for l in add_labels:
+                lid = self._resolve_label(l)
+                if lid:
+                    label_ids_add.append(lid)
+        if remove_labels:
+            for l in remove_labels:
+                lid = self._resolve_label(l)
+                if lid:
+                    label_ids_remove.append(lid)
+
+        # Skip inbox = remove INBOX label
+        if "INBOX" not in (label_ids_remove or []):
+            label_ids_remove.append("INBOX")
+
+        if label_ids_add:
+            action["addLabelIds"] = label_ids_add
+        if label_ids_remove:
+            action["removeLabelIds"] = label_ids_remove
+
+        body = {"criteria": criteria, "action": action}
+        try:
+            result = self._service.users().settings().filters().create(
+                userId="me", body=body
+            ).execute()
+            logger.info("Created Gmail filter for '%s' (id=%s)", from_address, result.get("id"))
+            return result
+        except Exception as exc:
+            logger.error("Failed to create filter for '%s': %s", from_address, exc)
+            return None
+
+    def delete_filter(self, filter_id: str) -> None:
+        try:
+            self._service.users().settings().filters().delete(
+                userId="me", id=filter_id
+            ).execute()
+        except Exception as exc:
+            logger.warning("Failed to delete filter %s: %s", filter_id, exc)
+
+    def sync_filters_from_rules(
+        self,
+        auto_rules: list,
+        min_confidence: float = 0.98,
+        min_evidence: int = 10,
+        existing_filter_senders: set[str] | None = None,
+    ) -> int:
+        """Create Gmail filters from high-confidence auto-rules.
+
+        Returns the number of new filters created.
+        """
+        if existing_filter_senders is None:
+            existing_filters = self.list_filters()
+            existing_filter_senders = set()
+            for f in existing_filters:
+                criteria = f.get("criteria", {})
+                if criteria.get("from"):
+                    existing_filter_senders.add(criteria["from"].lower())
+
+        created = 0
+        for rule in auto_rules:
+            if rule.status != "active":
+                continue
+            if rule.confidence < min_confidence:
+                continue
+            if rule.evidence_count < min_evidence:
+                continue
+            if rule.type != "sender":
+                continue
+
+            sender = rule.pattern.replace("\\", "")
+            if sender.lower() in existing_filter_senders:
+                continue
+
+            add_labels = []
+            if rule.classification:
+                add_labels.append(rule.classification)
+
+            should_read = rule.classification in ("Shopping", "Accounts", "Newsletters")
+
+            result = self.create_filter(
+                from_address=sender,
+                add_labels=add_labels,
+                remove_labels=["INBOX"],
+                should_mark_read=should_read,
+            )
+            if result:
+                existing_filter_senders.add(sender.lower())
+                created += 1
+
+        if created:
+            logger.info("Synced %d Gmail filters from auto-rules", created)
+        return created
+
     # -- Helpers --
 
     def _resolve_label(self, name_or_id: str) -> str | None:
@@ -290,6 +403,7 @@ class GmailClient:
             return self._label_cache[name_or_id]
         if name_or_id.startswith("CATEGORY_") or name_or_id in (
             "INBOX", "UNREAD", "STARRED", "SPAM", "TRASH", "SENT", "DRAFT",
+            "IMPORTANT",
         ):
             return name_or_id
         return None
