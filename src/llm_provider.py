@@ -25,6 +25,16 @@ class LLMProvider(ABC):
     def model_name(self) -> str: ...
 
 
+def _is_quota_error(exc: BaseException) -> bool:
+    """Heuristically detect provider-side quota/billing exhaustion vs transient errors."""
+    msg = str(exc).lower()
+    markers = (
+        "insufficient_quota", "quota exceeded", "exceeded your current quota",
+        "billing", "payment required", "out of credits",
+    )
+    return any(m in msg for m in markers)
+
+
 class LLMProviderChain:
     """Wraps primary + fallback providers with automatic failover."""
 
@@ -33,6 +43,13 @@ class LLMProviderChain:
         self.fallback = fallback
         self._calls_this_run = 0
         self._max_calls = 50
+        # Quota state: incremented each time a provider returns a quota-exhaustion
+        # error. Consumed by the daemon to emit structured alerts and by --status
+        # to surface the condition.
+        self.quota_errors_this_run = 0
+        self.last_quota_error_ts: str = ""
+        self.last_quota_error_provider: str = ""
+        self.last_quota_error_message: str = ""
 
     def configure(self, settings: Settings) -> None:
         self._max_calls = settings.llm_max_calls_per_run
@@ -43,9 +60,17 @@ class LLMProviderChain:
 
     def reset_run_counter(self) -> None:
         self._calls_this_run = 0
+        self.quota_errors_this_run = 0
 
     def can_call(self) -> bool:
         return self._calls_this_run < self._max_calls
+
+    def _record_quota_error(self, provider_name: str, exc: BaseException) -> None:
+        from datetime import datetime, timezone
+        self.quota_errors_this_run += 1
+        self.last_quota_error_ts = datetime.now(timezone.utc).isoformat()
+        self.last_quota_error_provider = provider_name
+        self.last_quota_error_message = str(exc)[:400]
 
     async def classify_thread(self, meta: ThreadMetadata, prompt_template: str) -> Classification | None:
         if not self.can_call():
@@ -55,11 +80,20 @@ class LLMProviderChain:
         try:
             return await self.primary.classify_thread(meta, prompt_template)
         except Exception as exc:
-            logger.warning("Primary LLM failed: %s", exc)
+            if _is_quota_error(exc):
+                self._record_quota_error(self.primary.provider_name(), exc)
+                logger.warning(
+                    "Primary LLM quota exhausted (%s): %s",
+                    self.primary.provider_name(), exc,
+                )
+            else:
+                logger.warning("Primary LLM failed: %s", exc)
             if self.fallback:
                 try:
                     return await self.fallback.classify_thread(meta, prompt_template)
                 except Exception as exc2:
+                    if _is_quota_error(exc2):
+                        self._record_quota_error(self.fallback.provider_name(), exc2)
                     logger.warning("Fallback LLM also failed: %s", exc2)
             return None
 

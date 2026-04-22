@@ -19,6 +19,12 @@ from src.models import (
 logger = logging.getLogger(__name__)
 
 
+class HistoryExpiredError(Exception):
+    """Raised when Gmail history.list returns 404 because the cursor is too old
+    (Gmail only retains ~7 days of history). Caller should reset the cursor
+    via get_current_history_id() and rely on the crawl sidecar for backfill."""
+
+
 class GmailClient:
     """Wrapper around the Gmail API for thread-level operations."""
 
@@ -85,23 +91,38 @@ class GmailClient:
     # -- Thread fetching --
 
     def get_history(self, start_history_id: str) -> tuple[list[dict], str]:
-        """Fetch changes since a history ID. Returns (history_records, new_history_id)."""
+        """Fetch changes since a history ID. Returns (history_records, new_history_id).
+
+        Raises HistoryExpiredError on HTTP 404 so callers can cleanly reset the cursor.
+        """
+        from googleapiclient.errors import HttpError
+
         results: list[dict] = []
         page_token = None
         latest_id = start_history_id
 
         while True:
-            resp = (
-                self._service.users()
-                .history()
-                .list(
-                    userId="me",
-                    startHistoryId=start_history_id,
-                    historyTypes=["messageAdded", "labelAdded", "labelRemoved"],
-                    pageToken=page_token,
+            try:
+                resp = (
+                    self._service.users()
+                    .history()
+                    .list(
+                        userId="me",
+                        startHistoryId=start_history_id,
+                        historyTypes=["messageAdded", "labelAdded", "labelRemoved"],
+                        pageToken=page_token,
+                    )
+                    .execute()
                 )
-                .execute()
-            )
+            except HttpError as exc:
+                if getattr(exc, "status_code", None) == 404 or (
+                    getattr(exc, "resp", None) is not None and exc.resp.status == 404
+                ):
+                    raise HistoryExpiredError(
+                        f"Gmail history cursor {start_history_id} is too old (>7d retention); "
+                        "reset to current historyId"
+                    ) from exc
+                raise
             results.extend(resp.get("history", []))
             latest_id = resp.get("historyId", latest_id)
             page_token = resp.get("nextPageToken")

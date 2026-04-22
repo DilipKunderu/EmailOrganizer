@@ -230,6 +230,32 @@ class HealthStatus:
     llm_dependency_pct: float = 0.0
     last_error: str = ""
     deploy_mode: str = "local"
+    # -- Tier 1 observability fields --
+    needs_reauth: bool = False
+    last_successful_cycle: str = ""          # ISO8601 of last cycle with a successful history fetch
+    last_error_ts: str = ""
+    consecutive_error_count: int = 0
+    threads_processed_24h: int = 0
+    actions_taken_24h: int = 0
+    sidecar_timestamps: dict[str, str] = field(default_factory=dict)
+    user_email: str = ""
+    # LLM quota signalling (surfaced by daemon when upstream returns insufficient_quota)
+    llm_quota_exhausted: bool = False
+    llm_quota_provider: str = ""
+    llm_quota_last_ts: str = ""
+
+
+# -- Fail-fast exit code contract --
+# Processes map terminal failures to these codes so launchd + watchdog can
+# distinguish silent bugs from user-actionable problems. See plan Step 6d.
+
+class ExitCode(enum.IntEnum):
+    OK = 0
+    NEEDS_REAUTH = 10
+    CONFIG_ERROR = 11
+    DB_ERROR = 12
+    ERROR_STREAK = 13
+    UNEXPECTED = 20
 
 
 @dataclass

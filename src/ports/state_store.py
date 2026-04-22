@@ -246,3 +246,34 @@ class StateStorePort(ABC):
         self, tenant_id: str, since: str | None = None
     ) -> dict[str, int]:
         """Count of classifications grouped by classified_by."""
+
+    # -- Error log (Tier 1 observability) --
+
+    @abstractmethod
+    async def log_error(
+        self,
+        source: str,
+        severity: str,
+        error_class: str,
+        message: str,
+        context: dict[str, Any] | None = None,
+    ) -> None:
+        """Record a structured error event. Severity: warning|error|fatal."""
+
+    @abstractmethod
+    async def get_recent_errors(
+        self, hours: int = 1, source: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Return error_log rows from the last N hours."""
+
+    @abstractmethod
+    async def count_threads_processed_since(
+        self, tenant_id: str, since_iso: str
+    ) -> int:
+        """Count rows in processed_threads whose updated_at >= since_iso."""
+
+    @abstractmethod
+    async def count_actions_since(
+        self, tenant_id: str, since_iso: str, status: str | None = "executed"
+    ) -> int:
+        """Count action_log rows created_at >= since_iso (optionally filter by status)."""

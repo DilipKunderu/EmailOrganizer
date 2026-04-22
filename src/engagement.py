@@ -71,10 +71,27 @@ class EngagementTracker:
     def _compute_score(stats: SenderStats) -> float:
         if stats.total_received == 0:
             return 0.0
-        return (stats.opened + 5 * stats.replied) / stats.total_received
+        # Positive signals: opens (1x), replies (5x).
+        # Negative signals: trash (-1x, routine cleanup is soft-negative),
+        # spam_marked (-3x, unambiguous "this was wrong").
+        # manually_archived stays neutral (often just "seen, done").
+        raw = (
+            stats.opened
+            + 5 * stats.replied
+            - stats.trashed
+            - 3 * stats.spam_marked
+        )
+        return max(0.0, raw / stats.total_received)
 
     @staticmethod
-    def compute_score(opened: int, replied: int, total: int) -> float:
+    def compute_score(
+        opened: int,
+        replied: int,
+        total: int,
+        trashed: int = 0,
+        spam_marked: int = 0,
+    ) -> float:
         if total == 0:
             return 0.0
-        return (opened + 5 * replied) / total
+        raw = opened + 5 * replied - trashed - 3 * spam_marked
+        return max(0.0, raw / total)

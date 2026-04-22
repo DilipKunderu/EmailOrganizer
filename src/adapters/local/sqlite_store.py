@@ -164,6 +164,18 @@ CREATE INDEX IF NOT EXISTS idx_processed_classified_by
     ON processed_threads(tenant_id, classified_by);
 CREATE INDEX IF NOT EXISTS idx_overrides_created
     ON user_overrides(tenant_id, created_at);
+
+CREATE TABLE IF NOT EXISTS error_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT NOT NULL,
+    source TEXT NOT NULL,
+    severity TEXT NOT NULL,
+    error_class TEXT,
+    message TEXT,
+    context_json TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_error_log_ts ON error_log(ts);
+CREATE INDEX IF NOT EXISTS idx_error_log_source_ts ON error_log(source, ts);
 """
 
 
@@ -613,6 +625,74 @@ class SQLiteStateStore(StateStorePort):
                 (tenant_id,),
             )
         return {row["classified_by"]: row["cnt"] for row in await cur.fetchall()}
+
+    # -- Error log (Tier 1 observability) --
+
+    async def log_error(
+        self,
+        source: str,
+        severity: str,
+        error_class: str,
+        message: str,
+        context: dict[str, Any] | None = None,
+    ) -> None:
+        ctx = json.dumps(context) if context else None
+        await self.db.execute(
+            """INSERT INTO error_log (ts, source, severity, error_class, message, context_json)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (_now(), source, severity, error_class, message, ctx),
+        )
+        await self.db.commit()
+
+    async def get_recent_errors(
+        self, hours: int = 1, source: str | None = None
+    ) -> list[dict[str, Any]]:
+        from datetime import timedelta
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+        if source:
+            cur = await self.db.execute(
+                """SELECT * FROM error_log
+                   WHERE ts >= ? AND source = ?
+                   ORDER BY ts DESC""",
+                (cutoff, source),
+            )
+        else:
+            cur = await self.db.execute(
+                """SELECT * FROM error_log
+                   WHERE ts >= ?
+                   ORDER BY ts DESC""",
+                (cutoff,),
+            )
+        return [dict(r) for r in await cur.fetchall()]
+
+    async def count_threads_processed_since(
+        self, tenant_id: str, since_iso: str
+    ) -> int:
+        cur = await self.db.execute(
+            """SELECT COUNT(*) FROM processed_threads
+               WHERE tenant_id=? AND updated_at >= ?""",
+            (tenant_id, since_iso),
+        )
+        row = await cur.fetchone()
+        return row[0] if row else 0
+
+    async def count_actions_since(
+        self, tenant_id: str, since_iso: str, status: str | None = "executed"
+    ) -> int:
+        if status:
+            cur = await self.db.execute(
+                """SELECT COUNT(*) FROM action_log
+                   WHERE tenant_id=? AND created_at >= ? AND status=?""",
+                (tenant_id, since_iso, status),
+            )
+        else:
+            cur = await self.db.execute(
+                """SELECT COUNT(*) FROM action_log
+                   WHERE tenant_id=? AND created_at >= ?""",
+                (tenant_id, since_iso),
+            )
+        row = await cur.fetchone()
+        return row[0] if row else 0
 
     # -- Classification feedback --
 

@@ -17,18 +17,31 @@ AGENT_LABEL = "com.emailorganizer.agent"
 LEARNER_LABEL = "com.emailorganizer.learner"
 STATUS_PATH = Path("~/.emailorganizer/status.json").expanduser()
 LOG_DIR = Path("~/.emailorganizer/logs").expanduser()
+DEADMAN_LABEL = "com.emailorganizer.deadman"
 
-# Long-running daemons: restart on exit
+# Long-running daemons: restart on exit (launchd KeepAlive)
 _KEEPALIVE_LABELS = {
     "com.emailorganizer.agent",
     "com.emailorganizer.crawl",
 }
 
-# Timer-based services: run on schedule, exit, wait for next interval
-_TIMER_INTERVALS = {
-    "com.emailorganizer.learner": 86400,   # daily (24h)
-    "com.emailorganizer.janitor": 3600,    # hourly
-    "com.emailorganizer.digest": 86400,    # daily (24h)
+# Wall-clock schedule (StartCalendarInterval): daily at a specific time
+_CALENDAR_SCHEDULES: dict[str, dict[str, int]] = {
+    "com.emailorganizer.learner": {"Hour": 3, "Minute": 0},
+    "com.emailorganizer.digest":  {"Hour": 8, "Minute": 0},
+}
+
+# Elapsed-time schedule (StartInterval): every N seconds (fires once on wake if missed)
+_TIMER_INTERVALS: dict[str, int] = {
+    "com.emailorganizer.janitor":  3600,    # hourly
+    "com.emailorganizer.watchdog": 900,     # every 15 min
+    "com.emailorganizer.canary":   3600,    # hourly
+    "com.emailorganizer.deadman":  21600,   # every 6 h
+}
+
+# Labels that invoke a shell script directly (not python -m src.main)
+_SHELL_SCRIPTS: dict[str, Path] = {
+    "com.emailorganizer.deadman": Path(__file__).resolve().parents[3] / "scripts" / "deadman.sh",
 }
 
 
@@ -39,20 +52,37 @@ class LaunchdProcessManager(ProcessManagerPort):
     async def install_service(self, executable_path: str, args: list[str]) -> None:
         LOG_DIR.mkdir(parents=True, exist_ok=True)
         log_name = self._label.rsplit(".", 1)[-1]
+
+        # Determine program arguments
+        if self._label in _SHELL_SCRIPTS:
+            script_path = _SHELL_SCRIPTS[self._label]
+            if not script_path.exists():
+                raise FileNotFoundError(f"Shell script not found: {script_path}")
+            program_args = ["/bin/bash", str(script_path)]
+        else:
+            program_args = [sys.executable, "-m", "src.main"] + args
+
         plist: dict = {
             "Label": self._label,
-            "ProgramArguments": [sys.executable, "-m", "src.main"] + args,
+            "ProgramArguments": program_args,
             "WorkingDirectory": str(Path.cwd()),
             "StandardOutPath": str(LOG_DIR / f"{log_name}-stdout.log"),
             "StandardErrorPath": str(LOG_DIR / f"{log_name}-stderr.log"),
             "ProcessType": "Background",
             "SoftResourceLimits": {"NumberOfFiles": 1024},
+            # Ensure PYENV / user bin are on PATH when launchd spawns us
+            "EnvironmentVariables": {
+                "PATH": "/Users/" + _current_user() + "/.pyenv/shims:/usr/local/bin:/usr/bin:/bin",
+            },
         }
 
         if self._label in _KEEPALIVE_LABELS:
             plist["KeepAlive"] = True
             plist["RunAtLoad"] = True
             plist["ThrottleInterval"] = 10
+        elif self._label in _CALENDAR_SCHEDULES:
+            plist["StartCalendarInterval"] = _CALENDAR_SCHEDULES[self._label]
+            plist["RunAtLoad"] = False
         elif self._label in _TIMER_INTERVALS:
             plist["StartInterval"] = _TIMER_INTERVALS[self._label]
             plist["RunAtLoad"] = True
@@ -96,3 +126,8 @@ class LaunchdProcessManager(ProcessManagerPort):
 
     async def stop_health_server(self) -> None:
         pass
+
+
+def _current_user() -> str:
+    import getpass
+    return getpass.getuser()
