@@ -51,17 +51,36 @@ python -m src.main --status
 
 ### 5. Configure LLM (Optional)
 
-Edit `config/settings.yaml`:
+The default is a **local** model via an OpenAI-compatible server — no API keys, no per-token costs.
+
+**Recommended: LM Studio + Qwen2.5-7B-Instruct (MLX on Apple Silicon)**
+
+1. Install [LM Studio](https://lmstudio.ai).
+2. Download `qwen2.5-7b-instruct` (MLX variant on Apple Silicon, GGUF Q4_K_M elsewhere).
+3. In LM Studio's **Developer** tab, start the server (default port `1234`).
+4. The default `config/settings.yaml` already points at it:
 
 ```yaml
 llm:
-  provider: ollama        # or openai, anthropic, llamacpp, none
-  model: llama3.2:8b
+  provider: llamacpp
+  model: qwen2.5-7b-instruct-mlx
+  endpoint: "http://localhost:1234"
 ```
 
-For cloud providers, set the API key in `.env`:
+Verify it's reachable:
+```bash
+curl http://localhost:1234/v1/models
+```
+
+**Other local backends** — the same `llamacpp` provider works with:
+- `llama.cpp --server` → `endpoint: http://localhost:8080`
+- Ollama → `endpoint: http://localhost:11434` (uses its OpenAI-compatible `/v1` path)
+- vLLM → whichever port you launched it on
+
+**Cloud providers** — set `llm.provider` to `openai` or `anthropic` and put the key in `.env`:
 ```
 OPENAI_API_KEY=sk-...
+ANTHROPIC_API_KEY=sk-ant-...
 ```
 
 ## CLI Reference

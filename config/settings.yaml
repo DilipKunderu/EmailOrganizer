@@ -42,16 +42,18 @@ digest:
   timezone: local
 
 llm:
-  provider: openai  # openai | anthropic | ollama | llamacpp | none
-  model: gpt-4o-mini
-  endpoint: ""
-  api_key_env: OPENAI_API_KEY
+  provider: llamacpp  # openai | anthropic | ollama | llamacpp | none
+  # `llamacpp` speaks the OpenAI-compatible HTTP API and works with
+  # LM Studio, llama.cpp --server, and vLLM alike.
+  model: qwen2.5-7b-instruct-mlx
+  endpoint: "http://localhost:1234"   # LM Studio default; llama.cpp default is 8080
+  api_key_env: ""
   temperature: 0.1
   max_tokens: 256
-  timeout_seconds: 30
+  timeout_seconds: 60                 # local first-call model load can be slow
   fallback: none
   send_body: false
-  max_calls_per_run: 50
+  max_calls_per_run: 500              # local inference is free; cap mostly guards infinite loops
 
 inbox:
   mode: priority  # priority | relaxed
