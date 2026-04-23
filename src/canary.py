@@ -143,10 +143,18 @@ class Canary:
 
     async def _verify(self, gmail: GmailClient, token: str) -> bool:
         """Return True iff a Gmail message with our canary token exists and was
-        already marked processed by the live-sync pipeline."""
-        query = f"subject:\"{CANARY_SUBJECT_PREFIX} {token}\""
+        already marked processed by the live-sync pipeline.
+
+        We search with `in:anywhere` so a canary that got trashed, archived, or
+        otherwise moved after processing still counts as verified. The real
+        contract we care about is "did the agent's pipeline process this
+        thread" -- tested by `is_thread_processed` below -- not "is the email
+        still in the default Gmail search view." Without `in:anywhere`, Gmail
+        defaults to `-in:trash -in:spam` and self-sent canaries that Gmail (or
+        the user) moved to Trash look like pipeline failures when they aren't.
+        """
+        query = f"in:anywhere subject:\"{CANARY_SUBJECT_PREFIX} {token}\""
         try:
-            # Use threads.list with our subject query
             threads, _, _ = gmail.list_threads(query=query, max_results=5)
         except Exception as exc:
             logger.warning("Canary verify search failed: %s", exc)
