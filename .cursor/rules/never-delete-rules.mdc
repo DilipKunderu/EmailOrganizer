@@ -1,0 +1,46 @@
+---
+description: Never delete, remove, or silently commit deletions of files in .cursor/rules/
+alwaysApply: true
+---
+
+# Never delete rules
+
+Files in `.cursor/rules/` encode persistent guidance that the user has
+deliberately chosen to apply. Treat them as append-only from the agent's
+perspective.
+
+## Hard rules
+
+- **Never** run `rm`, `git rm`, `Delete`, or any other removal on a file in
+  `.cursor/rules/`.
+- **Never** shrink a rule file by removing sections, headings, or bullets.
+  Additions, clarifications, and new worked examples are fine.
+- **Never** commit a pre-existing deletion of a rule file as part of an
+  unrelated change. `git add -A`, `git commit -a`, and similar sweeping
+  stagers are the common trap — always inspect `git status` for any `D`
+  line under `.cursor/rules/` before staging and call it out explicitly.
+
+## If you genuinely believe a rule should be removed or rewritten
+
+1. Do **not** delete or overwrite it unilaterally.
+2. Tell the user exactly which rule, exactly what you want to change, and
+   why the current guidance is wrong or obsolete.
+3. Wait for explicit confirmation before editing.
+4. If approved, make the change in a dedicated commit whose subject line
+   mentions the affected rule (e.g. `chore(rules): deprecate X because Y`),
+   not bundled with unrelated work.
+
+## If you notice a rule is already deleted in the working tree
+
+- Do **not** commit the deletion.
+- Restore it from git first (`git show <prior_commit>:.cursor/rules/<file>
+  > .cursor/rules/<file>`) and proceed with your actual task on a clean
+  tree, unless the user explicitly asks otherwise.
+
+## Rationale
+
+Rules are cheap to keep and expensive to lose. A deleted rule stops
+influencing every subsequent agent turn silently — there is no alert, no
+test failure, no code-review diff that makes its absence felt. Treating
+rule deletion as an exceptional, user-gated event closes that silent-loss
+failure mode.
