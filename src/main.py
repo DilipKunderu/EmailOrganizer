@@ -678,7 +678,7 @@ async def _install_all_services(adapters) -> None:
         mgr = LaunchdProcessManager(label=label)
         await mgr.install_service(sys.executable, args)
         logger.info("Installed %s", label)
-    logger.info("All 8 services installed")
+    logger.info("All 9 services installed")
 
 
 async def _uninstall_all_services() -> None:

@@ -365,8 +365,11 @@ class Remediator:
             return []
 
         # Count CONSECUTIVE failures: those with ts > last successful heartbeat.
-        # If heartbeat is absent (never had a success), count all today's
-        # failures -- pipeline has never verified itself, treat conservatively.
+        # If heartbeat is absent (never recorded a success, e.g. immediately
+        # after a clean restart), DON'T sweep up old failures from error_log
+        # -- those could pre-date the restart and are not evidence of a
+        # currently-broken pipeline. Use the 1h window instead, matching the
+        # intent of "alert only on persistent recent failure".
         if heartbeat is not None:
             consecutive_fails = [
                 e for e in errors_24h
@@ -375,11 +378,7 @@ class Remediator:
                 and _ts(e) > heartbeat
             ]
         else:
-            consecutive_fails = [
-                e for e in errors_24h
-                if e.get("source") == "canary"
-                and e.get("error_class") == "CanaryNotProcessed"
-            ]
+            consecutive_fails = canary_fails_1h
         n = len(consecutive_fails)
 
         if n >= 3:
