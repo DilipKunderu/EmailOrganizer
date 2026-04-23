@@ -39,12 +39,13 @@ HIGH_ERROR_RATE_THRESHOLD = 50     # errors in last 1h
 
 # Known sidecar cadences (seconds); staleness tolerance = 2x these.
 SIDECAR_INTERVALS = {
-    "agent":    300,        # writes on every live-sync poll (fallback cadence)
-    "crawl":    3600,       # once per crawl cycle (10min default, be lenient)
-    "janitor":  3600,       # hourly
-    "digest":   86400,      # daily
-    "learner":  86400,      # daily
-    "canary":   3600,       # hourly
+    "agent":      300,      # writes on every live-sync poll (fallback cadence)
+    "crawl":      3600,     # once per crawl cycle (10min default, be lenient)
+    "janitor":    3600,     # hourly
+    "digest":     86400,    # daily
+    "learner":    86400,    # daily
+    "canary":     3600,     # hourly
+    "remediator": 900,      # every 15 min
 }
 
 

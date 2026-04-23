@@ -54,6 +54,12 @@ def main() -> None:
     parser.add_argument("--canary", action="store_true",
                         help="Run one canary cycle: verify previous canary + send new one")
 
+    # Process 8: Remediator (auto-healing)
+    parser.add_argument("--remediate", action="store_true",
+                        help="Run one remediation cycle: detect failures in error_log + status.json "
+                             "and apply safe corrective actions (kickstart wedged sidecars, "
+                             "reset stuck cursor, swap LLM providers, checkpoint WAL).")
+
     # Auth
     parser.add_argument("--reauth", action="store_true",
                         help="Force re-authorization (opens browser). Use when --status shows needs_reauth.")
@@ -177,6 +183,9 @@ async def _dispatch(args: argparse.Namespace) -> int:
 
     if args.canary:
         return await _run_canary(adapters)
+
+    if args.remediate:
+        return await _run_remediator(adapters)
 
     if args.learn_from_trash:
         return await _run_learn_from_trash(adapters, args.learn_from_trash_max)
@@ -392,6 +401,33 @@ async def _run_canary(adapters) -> int:
         return int(ExitCode.OK)
     except Exception as exc:
         logger.error("Canary error: %s", exc, exc_info=True)
+        return int(ExitCode.UNEXPECTED)
+
+
+async def _run_remediator(adapters) -> int:
+    from src.remediator import Remediator
+    from src.models import ExitCode
+    try:
+        rem = Remediator(adapters)
+        summary = await rem.run_once()
+        print(
+            f"Remediator: {summary['proposed']} issue(s) detected, "
+            f"{summary['taken']} action(s) taken, "
+            f"{summary['skipped']} skipped, "
+            f"{summary['escalations']} escalation(s)."
+        )
+        for a in summary.get("actions", []):
+            print(f"  action_taken:   {a['category']}/{a.get('target', '')} -> "
+                  f"{a.get('action', '')} ({a.get('detail', '')[:80]})")
+        for a in summary.get("skipped_actions", []):
+            print(f"  action_skipped: {a['category']}/{a.get('target', '')} -> "
+                  f"{a.get('skip_reason', '')}")
+        for a in summary.get("escalated", []):
+            print(f"  ESCALATED:      {a['category']}/{a.get('target', '')}: "
+                  f"{a.get('reason', '')}")
+        return int(ExitCode.OK)
+    except Exception as exc:
+        logger.error("Remediator error: %s", exc, exc_info=True)
         return int(ExitCode.UNEXPECTED)
 
 
@@ -628,14 +664,15 @@ async def _install_all_services(adapters) -> None:
     from src.adapters.local.launchd_process_mgr import LaunchdProcessManager
 
     services = [
-        ("com.emailorganizer.agent",    ["--mode", "local"]),
-        ("com.emailorganizer.crawl",    ["--crawl", "--mode", "local"]),
-        ("com.emailorganizer.learner",  ["--learn-now", "--mode", "local"]),
-        ("com.emailorganizer.janitor",  ["--janitor", "--mode", "local"]),
-        ("com.emailorganizer.digest",   ["--digest", "--mode", "local"]),
-        ("com.emailorganizer.watchdog", ["--watchdog", "--mode", "local"]),
-        ("com.emailorganizer.canary",   ["--canary", "--mode", "local"]),
-        ("com.emailorganizer.deadman",  []),  # shell script; args ignored
+        ("com.emailorganizer.agent",      ["--mode", "local"]),
+        ("com.emailorganizer.crawl",      ["--crawl", "--mode", "local"]),
+        ("com.emailorganizer.learner",    ["--learn-now", "--mode", "local"]),
+        ("com.emailorganizer.janitor",    ["--janitor", "--mode", "local"]),
+        ("com.emailorganizer.digest",     ["--digest", "--mode", "local"]),
+        ("com.emailorganizer.watchdog",   ["--watchdog", "--mode", "local"]),
+        ("com.emailorganizer.canary",     ["--canary", "--mode", "local"]),
+        ("com.emailorganizer.remediator", ["--remediate", "--mode", "local"]),
+        ("com.emailorganizer.deadman",    []),  # shell script; args ignored
     ]
     for label, args in services:
         mgr = LaunchdProcessManager(label=label)
@@ -655,6 +692,7 @@ async def _uninstall_all_services() -> None:
         "com.emailorganizer.digest",
         "com.emailorganizer.watchdog",
         "com.emailorganizer.canary",
+        "com.emailorganizer.remediator",
         "com.emailorganizer.deadman",
     ]
     for label in labels:

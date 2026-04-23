@@ -25,7 +25,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from src.adapters.factory import AdapterSet
-from src.alerting import send_alert
 from src.gmail_client import GmailClient
 from src.models import DEFAULT_TENANT_ID
 
@@ -52,7 +51,10 @@ class Canary:
         await self._adapters.state_store.initialize()
         store = self._adapters.state_store
 
-        result: dict[str, Any] = {"verified": False, "sent": False, "alerted": False}
+        # `logged_failure` is set when a previous canary timed out. We never
+        # alert directly from here -- the remediator decides whether a
+        # pattern of failures warrants escalation (see _check_canary_fail).
+        result: dict[str, Any] = {"verified": False, "sent": False, "logged_failure": False}
 
         try:
             creds = await self._adapters.auth.get_credentials(DEFAULT_TENANT_ID)
@@ -85,23 +87,24 @@ class Canary:
                     await self._stamp_sidecar("canary")
                     result["verified"] = True
                 elif age > CANARY_TIMEOUT_SECONDS:
+                    # Failure of a single canary roundtrip is NOT an emergency
+                    # in itself -- transient IMAP/network/sleep blips happen.
+                    # We log it here for root-cause visibility, but escalation
+                    # is the remediator's job: it counts consecutive failures
+                    # (i.e. since the last verified canary) and only alerts
+                    # when the pipeline stays broken across multiple cycles.
                     msg = (
                         f"Canary token '{prev_token}' sent at {prev_sent_at_str} "
-                        f"({age / 60:.0f} minutes ago) was never processed by the pipeline. "
-                        f"This means the live-sync daemon is silently dropping mail."
+                        f"({age / 60:.0f} minutes ago) was never processed "
+                        "within the timeout. Logged for RCA; remediator will "
+                        "escalate only if this persists across cycles."
                     )
-                    logger.error(msg)
+                    logger.warning(msg)
                     await store.log_error(
-                        "canary", "fatal", "CanaryNotProcessed", msg,
+                        "canary", "warning", "CanaryNotProcessed", msg,
                         context={"token": prev_token, "age_seconds": age},
                     )
-                    await send_alert(
-                        "Canary roundtrip failed",
-                        msg + "\n\nRun: python -m src.main --status --mode local",
-                        "CRITICAL",
-                        gmail_client=gmail,
-                    )
-                    result["alerted"] = True
+                    result["logged_failure"] = True
                 else:
                     logger.info(
                         "Canary not yet verified (age=%.0fs < timeout=%.0fs)",

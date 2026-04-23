@@ -33,10 +33,11 @@ _CALENDAR_SCHEDULES: dict[str, dict[str, int]] = {
 
 # Elapsed-time schedule (StartInterval): every N seconds (fires once on wake if missed)
 _TIMER_INTERVALS: dict[str, int] = {
-    "com.emailorganizer.janitor":  3600,    # hourly
-    "com.emailorganizer.watchdog": 900,     # every 15 min
-    "com.emailorganizer.canary":   3600,    # hourly
-    "com.emailorganizer.deadman":  21600,   # every 6 h
+    "com.emailorganizer.janitor":    3600,   # hourly
+    "com.emailorganizer.watchdog":   900,    # every 15 min
+    "com.emailorganizer.canary":     3600,   # hourly
+    "com.emailorganizer.remediator": 900,    # every 15 min (offset naturally by launchd)
+    "com.emailorganizer.deadman":    21600,  # every 6 h
 }
 
 # Labels that invoke a shell script directly (not python -m src.main)
