@@ -276,14 +276,18 @@ class GmailClient:
 
     # -- Sending --
 
-    def send_self_email(self, subject: str, body_html: str) -> None:
+    def send_self_email(self, subject: str, body_html: str) -> dict:
+        """Send an email to self. Returns the Gmail API send response, which
+        includes `id` and `threadId` keys so callers can subsequently modify
+        labels on the sent thread (e.g. the canary immediately archiving its
+        own probe so it doesn't clutter the user's inbox)."""
         user_email = self.get_user_email()
         msg = MIMEText(body_html, "html")
         msg["to"] = user_email
         msg["from"] = user_email
         msg["subject"] = subject
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
-        self._service.users().messages().send(
+        return self._service.users().messages().send(
             userId="me", body={"raw": raw}
         ).execute()
 

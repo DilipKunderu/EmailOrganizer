@@ -54,7 +54,12 @@ class Canary:
         # `logged_failure` is set when a previous canary timed out. We never
         # alert directly from here -- the remediator decides whether a
         # pattern of failures warrants escalation (see _check_canary_fail).
-        result: dict[str, Any] = {"verified": False, "sent": False, "logged_failure": False}
+        # `archived` is True when the sent canary was successfully removed
+        # from INBOX; archive failure is non-fatal (pipeline still works).
+        result: dict[str, Any] = {
+            "verified": False, "sent": False,
+            "logged_failure": False, "archived": False,
+        }
 
         try:
             creds = await self._adapters.auth.get_credentials(DEFAULT_TENANT_ID)
@@ -120,17 +125,38 @@ class Canary:
             f"<p>Token: <code>{new_token}</code></p>"
             f"<p>Sent at: {_now().isoformat()}</p>"
             "<p>This message exists so a missed processing event can be detected. "
-            "You can safely archive or delete it.</p>"
+            "It is auto-archived out of your inbox.</p>"
             "</body></html>"
         )
         try:
-            gmail.send_self_email(subject=subject, body_html=body)
+            resp = gmail.send_self_email(subject=subject, body_html=body)
             await store.set_sync_value(DEFAULT_TENANT_ID, CANARY_TOKEN_KEY, new_token)
             await store.set_sync_value(
                 DEFAULT_TENANT_ID, CANARY_SENT_AT_KEY, _now().isoformat(),
             )
             result["sent"] = True
             logger.info("Canary sent: token=%s", new_token)
+
+            # Archive immediately so the user never sees it in their inbox.
+            # The live-sync daemon has already registered the messagesAdded
+            # event by the time modify runs, so the pipeline still processes
+            # the thread end-to-end; verify() uses in:anywhere and therefore
+            # still finds the archived thread.
+            thread_id = resp.get("threadId") if isinstance(resp, dict) else None
+            if thread_id:
+                try:
+                    gmail.modify_thread(thread_id, remove_labels=["INBOX"])
+                    result["archived"] = True
+                    logger.info("Canary auto-archived: thread=%s", thread_id)
+                except Exception as arch_exc:
+                    # Archive failure is non-fatal: the send + processing
+                    # contract still holds. Log for visibility but don't
+                    # let it wedge the cycle.
+                    logger.warning("Canary auto-archive failed: %s", arch_exc)
+                    await store.log_error(
+                        "canary", "warning", type(arch_exc).__name__,
+                        f"auto-archive failed (non-fatal): {arch_exc}",
+                    )
         except Exception as exc:
             logger.error("Failed to send canary: %s", exc)
             await store.log_error(
