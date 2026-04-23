@@ -1,0 +1,53 @@
+---
+description: Enforce single responsibility for modules, classes, and functions
+alwaysApply: true
+---
+
+# Single Responsibility Principle (SRP)
+
+Each unit of code should have **one clear reason to change**—one job, one concern.
+
+## Apply consistently
+
+- **Modules / files**: One primary purpose (e.g. one feature area, one integration, or one layer). Split when a file mixes unrelated concerns (e.g. HTTP + DB + business rules in one place).
+- **Classes / types**: Represent one concept or role. Prefer composition over a class that does many unrelated things.
+- **Functions**: Do one thing at one level of abstraction. If the name needs “and”, consider splitting or extracting helpers.
+
+## When editing
+
+- Prefer **small, focused** changes that keep boundaries clear rather than growing “god” modules.
+- When adding behavior, ask whether it belongs in the existing unit or a **new** one with a narrow name.
+- Reuse through **well-named** abstractions; avoid duplicating the same responsibility across many places.
+
+## Quick check
+
+Before finishing a change: *If this unit’s responsibility were described in one sentence, would that sentence stay crisp?* If not, split or extract.
+
+## Worked example in this repo: observability split
+
+The `src/watchdog.py`, `src/remediator.py`, and `src/canary.py` sidecars are a
+concrete SRP application. Each has exactly one reason to change:
+
+- **`watchdog.py` — detects and alerts.** Reads HealthStatus + error_log,
+  evaluates SLOs, fires macOS/email notifications via `alerting.py`. Never
+  mutates state. Changes only when SLO thresholds or alert content change.
+- **`remediator.py` — mitigates.** Reads the same state and takes corrective
+  actions (launchctl kickstart, DELETE sync_state, PRAGMA wal_checkpoint,
+  YAML provider swaps). Changes only when new remediation policies are
+  added. Never alerts directly except for escalations where its own budget
+  is exhausted.
+- **`canary.py` — probes.** Sends itself a marker email hourly and verifies
+  the previous one flowed through the pipeline. Logs a failure to error_log
+  but does **not** alert directly — that's the remediator's job. Changes
+  only when the probe mechanism itself changes.
+
+The alerting mechanism (`alerting.py`) is likewise single-responsibility:
+format + deliver notifications with dedup, nothing else.
+
+This separation is why adding a new failure class (e.g. disk-full) only
+requires a new policy in `remediator.py` — not changes to the probe or to
+alert delivery.
+
+Apply the same discipline when extending the system: if you find yourself
+adding a second unrelated concern to one of these files, that's a signal
+to create a new sibling instead.
