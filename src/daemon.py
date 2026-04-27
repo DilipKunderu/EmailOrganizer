@@ -36,6 +36,7 @@ from src.guardrails import Guardrails
 from src.label_change_handler import LabelChangeHandler
 from src.llm_provider import create_llm_provider
 from src.models import DEFAULT_TENANT_ID, ExitCode, HealthStatus, Settings
+from src.observability import is_transient
 from src.pipeline import ThreadPipeline
 from src.planner import ActionPlanner
 from src.unsubscribe import UnsubscribeEngine
@@ -50,6 +51,7 @@ FATAL_SLEEP_SECONDS = 600  # 10 minutes before process exit on fatal
 # daemon going silent while wedged inside wait_for_mail() or a blocked await.
 HEARTBEAT_TIMEOUT_SECONDS = 600   # 10 min; watchdog sidecar runs every 15 min
 HEARTBEAT_CHECK_INTERVAL_SECONDS = 60
+SLEEP_WAKE_GAP_SECONDS = 420  # 7 min: above normal 5 min IDLE, below guard.
 
 
 def _is_refresh_error(exc: BaseException) -> bool:
@@ -132,66 +134,15 @@ class Daemon:
             await self._record_fatal("agent", type(exc).__name__, str(exc))
             raise DaemonFatalExit(ExitCode.UNEXPECTED, f"auth failed: {exc}")
 
-        self._gmail = GmailClient(creds)
-        self._user_email = self._gmail.get_user_email()
+        gmail = GmailClient(creds)
+        self._user_email = gmail.get_user_email()
         logger.info("Authenticated as %s", self._user_email)
 
         # Propagate user email to the notifier so XOAUTH2 works
         if hasattr(self._adapters.mail_notifier, "set_user_email"):
             self._adapters.mail_notifier.set_user_email(self._user_email)
 
-        label_map = self._gmail.provision_labels()
-        label_id_to_name = {v: k for k, v in label_map.items()}
-
-        llm = create_llm_provider(self._settings)
-        manual_rules = await self._adapters.config_loader.load_manual_rules()
-        auto_rules = await self._adapters.config_loader.load_auto_rules()
-        classify_prompt = ""
-        try:
-            classify_prompt = await self._adapters.config_loader.load_prompt("classify")
-        except FileNotFoundError:
-            pass
-
-        classifier = HybridClassifier(
-            self._settings, manual_rules, auto_rules, llm, classify_prompt,
-        )
-        planner = ActionPlanner(self._settings)
-        allowlist = await self._adapters.config_loader.load_allowlist()
-        guardrails = Guardrails(
-            self._settings, self._adapters.state_store, DEFAULT_TENANT_ID, allowlist,
-        )
-        executor = BatchExecutor(
-            self._gmail, self._adapters.state_store, DEFAULT_TENANT_ID,
-        )
-        self._engagement = EngagementTracker(
-            self._adapters.state_store, DEFAULT_TENANT_ID,
-        )
-        unsubscribe = UnsubscribeEngine(
-            self._gmail, self._adapters.state_store, self._settings, DEFAULT_TENANT_ID,
-        )
-
-        self._pipeline = ThreadPipeline(
-            gmail=self._gmail,
-            state_store=self._adapters.state_store,
-            classifier=classifier,
-            planner=planner,
-            guardrails=guardrails,
-            executor=executor,
-            engagement=self._engagement,
-            unsubscribe=unsubscribe,
-            tenant_id=DEFAULT_TENANT_ID,
-            label_id_to_name=label_id_to_name,
-        )
-        self._label_handler = LabelChangeHandler(
-            state_store=self._adapters.state_store,
-            engagement=self._engagement,
-            tenant_id=DEFAULT_TENANT_ID,
-            label_id_to_name=label_id_to_name,
-        )
-
-        # Store references for config reload
-        self._classifier = classifier
-        self._llm = llm
+        await self._configure_pipeline(gmail)
 
         history_id = await self._adapters.state_store.get_sync_value(
             DEFAULT_TENANT_ID, "history_id"
@@ -222,6 +173,67 @@ class Daemon:
 
         self._running = True
         logger.info("Live sync daemon started")
+
+    async def _configure_pipeline(self, gmail: GmailClient) -> None:
+        """Build or rebuild the processing pipeline around a Gmail client.
+
+        This is called both at startup and after a sleep/wake reconnect so the
+        pipeline's executor/unsubscribe components don't hold stale HTTP
+        sessions.
+        """
+        assert self._settings is not None, "Settings must be loaded before pipeline setup"
+
+        label_map = gmail.provision_labels()
+        label_id_to_name = {v: k for k, v in label_map.items()}
+
+        llm = create_llm_provider(self._settings)
+        manual_rules = await self._adapters.config_loader.load_manual_rules()
+        auto_rules = await self._adapters.config_loader.load_auto_rules()
+        classify_prompt = ""
+        try:
+            classify_prompt = await self._adapters.config_loader.load_prompt("classify")
+        except FileNotFoundError:
+            pass
+
+        classifier = HybridClassifier(
+            self._settings, manual_rules, auto_rules, llm, classify_prompt,
+        )
+        planner = ActionPlanner(self._settings)
+        allowlist = await self._adapters.config_loader.load_allowlist()
+        guardrails = Guardrails(
+            self._settings, self._adapters.state_store, DEFAULT_TENANT_ID, allowlist,
+        )
+        executor = BatchExecutor(gmail, self._adapters.state_store, DEFAULT_TENANT_ID)
+        self._engagement = EngagementTracker(
+            self._adapters.state_store, DEFAULT_TENANT_ID,
+        )
+        unsubscribe = UnsubscribeEngine(
+            gmail, self._adapters.state_store, self._settings, DEFAULT_TENANT_ID,
+        )
+
+        self._gmail = gmail
+        self._pipeline = ThreadPipeline(
+            gmail=gmail,
+            state_store=self._adapters.state_store,
+            classifier=classifier,
+            planner=planner,
+            guardrails=guardrails,
+            executor=executor,
+            engagement=self._engagement,
+            unsubscribe=unsubscribe,
+            tenant_id=DEFAULT_TENANT_ID,
+            label_id_to_name=label_id_to_name,
+        )
+        self._label_handler = LabelChangeHandler(
+            state_store=self._adapters.state_store,
+            engagement=self._engagement,
+            tenant_id=DEFAULT_TENANT_ID,
+            label_id_to_name=label_id_to_name,
+        )
+
+        # Store references for config reload
+        self._classifier = classifier
+        self._llm = llm
 
     async def run_forever(self) -> None:
         loop = asyncio.get_event_loop()
@@ -278,15 +290,28 @@ class Daemon:
         # returns (up to 25 min later for IMAP IDLE).
         await self._write_health()
 
+        last_iter_monotonic = time.monotonic()
         while self._running:
             try:
+                gap = time.monotonic() - last_iter_monotonic
+                if gap > SLEEP_WAKE_GAP_SECONDS:
+                    await self._handle_sleep_wake(gap)
+                    last_iter_monotonic = time.monotonic()
+                    continue
+
                 # wait_for_mail() returns True on a new-mail push, False on timeout
                 # or fallback_poll tick. We run a sync cycle either way so the
                 # history cursor + last_successful_cycle advance even on a quiet
                 # inbox (prevents false "no successful sync in 30 min" alerts).
                 await self._adapters.mail_notifier.wait_for_mail()
+                gap = time.monotonic() - last_iter_monotonic
+                if gap > SLEEP_WAKE_GAP_SECONDS:
+                    await self._handle_sleep_wake(gap)
+                    last_iter_monotonic = time.monotonic()
+                    continue
                 await self._live_sync_cycle()
                 await self._write_health()
+                last_iter_monotonic = time.monotonic()
 
                 if self._consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
                     await self._record_fatal(
@@ -309,6 +334,48 @@ class Daemon:
                 logger.error("Live sync loop error: %s", exc, exc_info=True)
                 await self._record_error("agent", "error", type(exc).__name__, str(exc))
                 await asyncio.sleep(30)
+
+    async def _handle_sleep_wake(self, gap_seconds: float) -> None:
+        """Rebuild Gmail HTTPS + IMAP connections after a long event-loop gap.
+
+        Long gaps usually mean laptop sleep/wake. Existing HTTPS/IMAP sockets
+        are often stale afterwards, so reset them proactively and skip the
+        would-be stale history fetch for this iteration.
+        """
+        logger.info(
+            "Long loop gap detected (%ds); resetting Gmail + IMAP connections",
+            int(gap_seconds),
+        )
+        try:
+            await self._adapters.state_store.log_error(
+                "agent", "info", "SleepWakeDetected",
+                f"Loop gap of {int(gap_seconds)}s; resetting connections",
+                context={"gap_seconds": int(gap_seconds)},
+            )
+        except Exception:
+            pass
+
+        try:
+            creds = await self._adapters.auth.get_credentials(DEFAULT_TENANT_ID)
+            new_gmail = GmailClient(creds)
+            self._user_email = new_gmail.get_user_email()
+            await self._configure_pipeline(new_gmail)
+            if hasattr(self._adapters.mail_notifier, "set_user_email"):
+                self._adapters.mail_notifier.set_user_email(self._user_email)
+        except Exception as exc:
+            logger.warning("Gmail client reset after sleep/wake failed: %s", exc)
+
+        try:
+            await self._adapters.mail_notifier.disconnect()
+        except Exception:
+            pass
+        try:
+            token = await self._adapters.auth.get_access_token(DEFAULT_TENANT_ID)
+            await self._adapters.mail_notifier.connect(token)
+        except Exception as exc:
+            logger.warning("IMAP reconnect after sleep/wake failed: %s", exc)
+
+        await self._write_health()
 
     # -- Sync cycle --
 
@@ -347,6 +414,10 @@ class Daemon:
                     "Refresh token revoked — run: python -m src.main --reauth --mode local",
                 )
                 self._running = False
+                return
+            if is_transient(exc):
+                logger.warning("History fetch transient error (will retry): %s", exc)
+                await self._record_error("agent", "warning", type(exc).__name__, str(exc))
                 return
             logger.error("History fetch failed: %s", exc)
             await self._record_error("agent", "error", type(exc).__name__, str(exc))
@@ -527,10 +598,10 @@ class Daemon:
                         f"(threshold={HEARTBEAT_TIMEOUT_SECONDS}s). Likely wedged "
                         "inside wait_for_mail or a blocked await. Forcing restart."
                     )
-                    logger.error(msg)
+                    logger.warning(msg)
                     try:
                         await self._adapters.state_store.log_error(
-                            "agent", "fatal", "HeartbeatStalled", msg,
+                            "agent", "info", "HeartbeatRestart", msg,
                             context={"silent_for_seconds": int(silent_for)},
                         )
                     except Exception:

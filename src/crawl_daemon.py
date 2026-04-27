@@ -20,6 +20,7 @@ from src.gmail_client import GmailClient
 from src.guardrails import Guardrails
 from src.llm_provider import create_llm_provider
 from src.models import DEFAULT_TENANT_ID, ExitCode
+from src.observability import is_transient
 from src.pipeline import ThreadPipeline
 from src.planner import ActionPlanner
 from src.unsubscribe import UnsubscribeEngine
@@ -139,6 +140,17 @@ class CrawlDaemon:
                     self._exit_code = ExitCode.NEEDS_REAUTH
                     self._running = False
                     break
+                if is_transient(exc):
+                    logger.warning("Crawl transient error (will retry): %s", exc, exc_info=True)
+                    try:
+                        await self._adapters.state_store.log_error(
+                            "crawl", "warning", type(exc).__name__, str(exc),
+                            context={"transient": True},
+                        )
+                    except Exception:
+                        pass
+                    await asyncio.sleep(60)
+                    continue
                 consecutive_errors += 1
                 logger.error("Crawl error (%d consecutive): %s", consecutive_errors, exc, exc_info=True)
                 try:

@@ -93,7 +93,9 @@ TRANSIENT_EXCEPTION_NAMES = {
 }
 
 
-def _is_transient(exc: BaseException) -> bool:
+def is_transient(exc: BaseException) -> bool:
+    """Return True for transient network / transport failures that should be
+    retried or treated as self-healing noise, not permanent failures."""
     if isinstance(exc, (OSError, TimeoutError, asyncio.TimeoutError)):
         return True
     name = type(exc).__name__
@@ -126,7 +128,7 @@ async def run_with_retries(
             return await fn()
         except BaseException as exc:  # noqa: BLE001
             last_exc = exc
-            if not _is_transient(exc):
+            if not is_transient(exc):
                 raise
             delay = BACKOFF_SECONDS[min(attempt, len(BACKOFF_SECONDS) - 1)]
             logger.warning(
